@@ -1,0 +1,64 @@
+services:
+  # ── Backend (FastAPI) ──────────────────────────────────────────────────────
+  - type: web
+    name: asistencia-grados-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: MONGODB_URL
+        sync: false          # set manually in Render dashboard (MongoDB Atlas URL)
+      - key: MONGODB_DB
+        value: politecnico_grados
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "480"
+      - key: FRONTEND_URL
+        fromService:
+          type: web
+          name: asistencia-grados-frontend
+          property: host
+      - key: MAIL_SERVER
+        value: smtp.gmail.com
+      - key: MAIL_PORT
+        value: "587"
+      - key: MAIL_FROM_NAME
+        value: "Politécnico Internacional"
+      # Set these manually in Render dashboard:
+      # MAIL_USERNAME, MAIL_PASSWORD, MAIL_FROM
+      # TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM
+
+  # ── Frontend (React → Static Site) ────────────────────────────────────────
+  - type: web
+    name: asistencia-grados-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: build
+    headers:
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache, no-store, must-revalidate
+      - path: /manifest.json
+        name: Cache-Control
+        value: no-cache
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: REACT_APP_API_URL
+        fromService:
+          type: web
+          name: asistencia-grados-backend
+          property: host
+      - key: REACT_APP_WS_URL
+        fromService:
+          type: web
+          name: asistencia-grados-backend
+          property: hostWithScheme
