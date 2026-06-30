@@ -1,0 +1,3 @@
+# Sistema de Control de Asistencia - Politécnico Internacional
+
+Inicializando repositorio...
