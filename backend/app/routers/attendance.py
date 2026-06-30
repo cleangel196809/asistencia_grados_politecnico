@@ -1,8 +1,10 @@
+from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends
 
 from ..models.attendance import SyncRecord, ValidateQRRequest
+from ..routers.websocket import broadcast_to_event
 from ..services.sync_service import process_sync_records
 from ..utils.auth import get_current_user
 from ..utils.helpers import parse_object_id, serialize_list
@@ -37,8 +39,6 @@ async def validate_qr(request: ValidateQRRequest, current_user=Depends(get_curre
             "fecha_uso": qr.get("fecha_uso"),
         }
 
-    from datetime import datetime
-
     now = datetime.utcnow()
     fecha_uso = now.strftime("%Y-%m-%d")
     hora_uso = now.strftime("%H:%M:%S")
@@ -67,8 +67,6 @@ async def validate_qr(request: ValidateQRRequest, current_user=Depends(get_curre
         "sincronizado": True,
     }
     await db.attendance.insert_one(attendance_doc)
-
-    from ..routers.websocket import broadcast_to_event
 
     try:
         await broadcast_to_event(
