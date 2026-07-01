@@ -24,10 +24,7 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("MAIL_PASSWORD", "SMTP_PASSWORD"),
     )
-    MAIL_FROM: Optional[str] = Field(
-        default="eventospolitecnicointernacional@pi.edu.co",
-        validation_alias=AliasChoices("MAIL_FROM", "SMTP_USER"),
-    )
+    MAIL_FROM: Optional[str] = "eventospolitecnicointernacional@pi.edu.co"
     MAIL_PORT: int = Field(default=587, validation_alias=AliasChoices("MAIL_PORT", "SMTP_PORT"))
     MAIL_SERVER: str = Field(
         default="smtp.gmail.com",
