@@ -10,8 +10,17 @@ from passlib.context import CryptContext
 
 load_dotenv()
 
-MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
-MONGODB_DB = os.getenv("MONGODB_DB", "politecnico_grados")
+
+def env_value(*names: str, default: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return default
+
+
+MONGODB_URL = env_value("MONGODB_URL", "MONGO_URL", default="mongodb://localhost:27017")
+MONGODB_DB = env_value("MONGODB_DB", "DB_NAME", default="politecnico_grados")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 

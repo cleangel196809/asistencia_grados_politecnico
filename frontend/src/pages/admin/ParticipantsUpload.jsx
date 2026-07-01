@@ -36,7 +36,7 @@ const ParticipantsUpload = () => {
     if (!f) return;
     setFile(f);
     toast.success(`Archivo seleccionado: ${f.name}`);
-    setPreview([{ no_documento: '...', sede: '...', programa: '...', apellidos_nombres: '...', tel1: '...', email_institucional: '...', cohorte: '...', promedio: '...' }]);
+    setPreview([{ no: '1', documento: '123456789', sede: 'Bogotá', programa: 'Ingeniería de Sistemas', apellidos_nombres: 'PÉREZ GARCÍA JUAN', tel1: '3001234567', email_institucional: 'juan@pi.edu.co', cohorte: '2023-1', promedio: '4.2' }]);
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -109,14 +109,14 @@ const ParticipantsUpload = () => {
             <div className="overflow-x-auto">
               <table className="min-w-full text-xs border">
                 <thead className="bg-gray-50">
-                  <tr>{['No DOCUMENTO', 'SEDE', 'PROGRAMA', 'APELLIDOS Y NOMBRES', 'TEL1', 'EMAIL', 'COHORTE', 'PROMEDIO'].map(h => (
+                  <tr>{['No', 'DOCUMENTO', 'SEDE', 'PROGRAMA', 'APELLIDOS Y NOMBRES', 'TEL1', 'EMAIL INSTITUCIONAL', 'COHORTE', 'PROMEDIO'].map(h => (
                     <th key={h} className="border px-2 py-1">{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody>
                   {preview.map((row, i) => (
                     <tr key={i}>
-                      {[row.no_documento, row.sede, row.programa, row.apellidos_nombres, row.tel1, row.email_institucional, row.cohorte, row.promedio].map((v, j) => (
+                      {[row.no, row.documento, row.sede, row.programa, row.apellidos_nombres, row.tel1, row.email_institucional, row.cohorte, row.promedio].map((v, j) => (
                         <td key={j} className="border px-2 py-1">{v}</td>
                       ))}
                     </tr>

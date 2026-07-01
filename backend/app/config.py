@@ -1,19 +1,38 @@
 from typing import Optional
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    MONGODB_URL: str = "mongodb://localhost:27017"
-    MONGODB_DB: str = "politecnico_grados"
+    MONGODB_URL: str = Field(
+        default="mongodb://localhost:27017",
+        validation_alias=AliasChoices("MONGODB_URL", "MONGO_URL"),
+    )
+    MONGODB_DB: str = Field(
+        default="politecnico_grados",
+        validation_alias=AliasChoices("MONGODB_DB", "DB_NAME"),
+    )
     SECRET_KEY: str = "cambiar_esta_clave_en_produccion_muy_larga_y_segura"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
-    MAIL_USERNAME: Optional[str] = None
-    MAIL_PASSWORD: Optional[str] = None
-    MAIL_FROM: Optional[str] = None
-    MAIL_PORT: int = 587
-    MAIL_SERVER: str = "smtp.gmail.com"
+    MAIL_USERNAME: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("MAIL_USERNAME", "SMTP_USER"),
+    )
+    MAIL_PASSWORD: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("MAIL_PASSWORD", "SMTP_PASSWORD"),
+    )
+    MAIL_FROM: Optional[str] = Field(
+        default="eventospolitecnicointernacional@pi.edu.co",
+        validation_alias=AliasChoices("MAIL_FROM", "SMTP_USER"),
+    )
+    MAIL_PORT: int = Field(default=587, validation_alias=AliasChoices("MAIL_PORT", "SMTP_PORT"))
+    MAIL_SERVER: str = Field(
+        default="smtp.gmail.com",
+        validation_alias=AliasChoices("MAIL_SERVER", "SMTP_HOST"),
+    )
     MAIL_FROM_NAME: str = "Politécnico Internacional"
     TWILIO_ACCOUNT_SID: Optional[str] = None
     TWILIO_AUTH_TOKEN: Optional[str] = None

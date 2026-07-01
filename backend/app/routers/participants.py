@@ -45,8 +45,15 @@ async def upload_participants(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid Excel file") from exc
 
-    column_mapping = {
-        "No DOCUMENTO": "no_documento",
+    normalized_columns = {str(column).strip().upper(): column for column in df.columns}
+    column_mapping = {}
+
+    if "NO DOCUMENTO" in normalized_columns:
+        column_mapping[normalized_columns["NO DOCUMENTO"]] = "no_documento"
+    elif "DOCUMENTO" in normalized_columns:
+        column_mapping[normalized_columns["DOCUMENTO"]] = "no_documento"
+
+    for source, target in {
         "SEDE": "sede",
         "PROGRAMA": "programa",
         "APELLIDOS Y NOMBRES": "apellidos_nombres",
@@ -54,15 +61,31 @@ async def upload_participants(
         "EMAIL INSTITUCIONAL": "email_institucional",
         "COHORTE": "cohorte",
         "PROMEDIO": "promedio",
-    }
+    }.items():
+        if source in normalized_columns:
+            column_mapping[normalized_columns[source]] = target
+
     df = df.rename(columns=column_mapping)
 
-    required_columns = set(column_mapping.values())
+    required_columns = {
+        "no_documento",
+        "sede",
+        "programa",
+        "apellidos_nombres",
+        "tel1",
+        "email_institucional",
+        "cohorte",
+        "promedio",
+    }
     missing_columns = sorted(required_columns - set(df.columns))
     if missing_columns:
         raise HTTPException(
             status_code=400,
-            detail=f"Missing required columns: {', '.join(missing_columns)}",
+            detail=(
+                f"Missing required columns: {', '.join(missing_columns)}. "
+                "Use DOCUMENTO or No DOCUMENTO, plus SEDE, PROGRAMA, "
+                "APELLIDOS Y NOMBRES, TEL1, EMAIL INSTITUCIONAL, COHORTE y PROMEDIO."
+            ),
         )
 
     participants_to_insert = []

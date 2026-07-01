@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from ..database import get_db
-from ..services.excel_service import generate_attendance_excel, generate_pending_excel
+from ..services.excel_service import generate_attendance_excel, generate_final_report_excel, generate_pending_excel
 from ..utils.auth import get_current_user
 from ..utils.helpers import parse_object_id, serialize_doc
 
@@ -63,4 +63,19 @@ async def download_pending_report(evento_id: str, current_user=Depends(get_curre
         io.BytesIO(excel_data),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=pendientes_{evento_id}.xlsx"},
+    )
+
+
+@router.get("/final/{evento_id}")
+async def download_final_report(evento_id: str, current_user=Depends(get_current_user)):
+    if current_user["role"] not in ["admin", "logistico"]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    db = get_db()
+    excel_data = await generate_final_report_excel(db, evento_id)
+
+    return StreamingResponse(
+        io.BytesIO(excel_data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=informe_final_{evento_id}.xlsx"},
     )

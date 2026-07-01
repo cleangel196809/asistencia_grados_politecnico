@@ -7,9 +7,11 @@ async def send_whatsapp_qr(
     to_number: str,
     from_number: Optional[str],
     nombre: str,
+    event_name: str,
     numero_boleta: int,
     total_boletas: int,
     fecha: str,
+    horario: str,
     lugar: str,
     qr_image_b64: str,
     qr_id: str,
@@ -36,9 +38,11 @@ async def send_whatsapp_qr(
             to_wa = f"whatsapp:{to_wa}"
 
         message_body = (
-            f"Hola {nombre}, aquí está tu invitación para la Ceremonia de Grado del "
-            f"Politécnico Internacional.\nBoleta #{numero_boleta} de {total_boletas}\n"
-            f"Fecha: {fecha}\nLugar: {lugar}\nCódigo: {qr_id}"
+            f"Hola {nombre}, esta es tu invitación al evento de grado del "
+            f"Politécnico Internacional.\nEvento: {event_name}\n"
+            f"Fecha: {fecha}\nHora: {horario}\nLugar: {lugar}\n"
+            f"Boleta {numero_boleta} de {total_boletas}\n"
+            f"Presenta este código en la entrada. Uso único.\nCódigo: {qr_id}"
         )
 
         media_url = f"{settings.BACKEND_URL}/api/qr/image/{qr_id}"

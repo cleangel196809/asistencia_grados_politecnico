@@ -8,10 +8,10 @@ import {
 
 const adminLinks = [
   { to: '/admin', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/admin/users', icon: Users, label: 'Usuarios' },
   { to: '/admin/events', icon: Calendar, label: 'Eventos' },
   { to: '/admin/participants', icon: Upload, label: 'Participantes' },
   { to: '/admin/qr', icon: QrCode, label: 'Gestión QR' },
+  { to: '/admin/users', icon: Users, label: 'Usuarios' },
   { to: '/admin/reports', icon: FileBarChart, label: 'Reportes' },
 ];
 

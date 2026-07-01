@@ -87,6 +87,10 @@ const Reports = () => {
         )}
 
         <div className="flex gap-4 flex-wrap">
+          <button onClick={() => downloadReport('final')} disabled={!selectedEvent || loading}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50">
+            <FileDown size={18} /> Informe Final
+          </button>
           <button onClick={() => downloadReport('attendance')} disabled={!selectedEvent || loading}
             className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 disabled:opacity-50">
             <FileDown size={18} /> Reporte Asistencia

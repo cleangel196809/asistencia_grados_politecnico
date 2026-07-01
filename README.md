@@ -51,154 +51,100 @@ Sistema integral que permite:
 
 ---
 
-## �� Instalación Local con Docker
-
-### Requisitos
-- Docker Desktop 4.x+
-- Git
-
-### Pasos
+## 🚀 Instalación local (paso a paso)
 
 ```bash
-# 1. Clonar repositorio
-git clone https://github.com/cleangel196809/asistencia_grados_politecnico
-cd asistencia_grados_politecnico
-
-# 2. Configurar variables de entorno
-cp .env.example .env
-# Editar .env con tus valores (opcional para prueba local)
-
-# 3. Levantar servicios
-docker-compose up -d
-
-# 4. Inicializar base de datos con usuarios por defecto
-docker-compose exec backend python init_db.py
-
-# 5. Acceder a la aplicación
-# Frontend: http://localhost:3000
-# API docs: http://localhost:8000/docs
-```
-
-### Usuarios por defecto
-
-| Usuario | Contraseña | Rol |
-|---------|-----------|-----|
-| admin | admin123 | Administrador |
-| logistico | logis123 | Logístico |
-| scanner | scanner123 | Scanner |
-
----
-
-## 🔧 Instalación Manual (sin Docker)
-
-### Requisitos
-- Python 3.11+
-- Node.js 18+
-- MongoDB 7
-
-### Backend
-
-```bash
+# Backend
 cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-# Copiar y editar variables de entorno
 cp .env.example .env
-
-# Inicializar BD
 python init_db.py
-
-# Iniciar servidor
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
 
-### Frontend
-
-```bash
-cd frontend
+# Frontend
+cd ../frontend
 npm install
-
-# Configurar URL del backend
 echo "REACT_APP_API_URL=http://localhost:8000" > .env
 echo "REACT_APP_WS_URL=ws://localhost:8000" >> .env
-
-# Iniciar
 npm start
 ```
 
 ---
 
-## ☁️ Despliegue en Railway
+## 👤 Usuarios por defecto
 
-1. Crear cuenta en [railway.app](https://railway.app)
-2. **New Project → Deploy from GitHub Repo**
-3. Seleccionar `cleangel196809/asistencia_grados_politecnico`
-4. Agregar servicio **MongoDB** desde el Marketplace de Railway
-5. En el servicio Backend, configurar:
-   - **Root Directory:** `backend`
-   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-   - Variables de entorno: copiar desde `.env.example` y ajustar `MONGODB_URL`
-6. En el servicio Frontend, configurar:
-   - **Root Directory:** `frontend`
-   - **Build Command:** `npm run build`
-   - Variable: `REACT_APP_API_URL=https://tu-backend.railway.app`
-7. Ejecutar init_db: Railway Console → `python init_db.py`
+| Rol | Usuario | Contraseña |
+|-----|---------|-----------|
+| admin | admin | admin123 |
+| logistico | logistico | logis123 |
+| scanner | scanner | scanner123 |
 
 ---
 
-## 🌐 Despliegue en Render
-
-### Backend
-1. [render.com](https://render.com) → **New Web Service**
-2. Conectar repositorio de GitHub
-3. Configurar:
-   - **Root Directory:** `backend`
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-4. Agregar variables de entorno desde `.env.example`
-5. Para MongoDB: usar [MongoDB Atlas](https://www.mongodb.com/atlas) (free tier)
-
-### Frontend
-1. **New Static Site** en Render
-2. **Root Directory:** `frontend`
-3. **Build Command:** `npm run build`
-4. **Publish Directory:** `build`
-5. Variable: `REACT_APP_API_URL=https://tu-backend.onrender.com`
-
----
-
-## 🖥️ Despliegue en VPS (Ubuntu 22.04)
+## 🐳 Despliegue con Docker
 
 ```bash
-# 1. Instalar Docker en Ubuntu
+docker-compose up --build
+docker-compose -f docker-compose.prod.yml up --build
+```
+
+---
+
+## ☁️ Variables de entorno requeridas
+
+```env
+MONGO_URL=mongodb://mongo:27017
+DB_NAME=politecnico_asistencia
+SECRET_KEY=your-secret-key-here
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=eventospolitecnicointernacional@pi.edu.co
+SMTP_PASSWORD=
+```
+
+---
+
+## ☁️ Despliegue en la nube
+
+### 1. Railway
+
+1. Crear proyecto nuevo en Railway y conectar el repositorio.
+2. Agregar un servicio MongoDB desde el marketplace.
+3. Crear servicio Backend con **Root Directory** `backend` y comando `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+4. Crear servicio Frontend con **Root Directory** `frontend` y `npm run build`.
+5. Configurar variables del backend con los valores de `.env.example`, ajustando `MONGO_URL` al servicio MongoDB de Railway.
+6. Configurar `REACT_APP_API_URL` y `REACT_APP_WS_URL` en el frontend apuntando al backend publicado.
+7. Ejecutar `python init_db.py` en la consola del backend para sembrar usuarios e índices.
+
+### 2. DigitalOcean Droplet con Docker
+
+1. Crear un Droplet Ubuntu 22.04 con puertos 80/443 abiertos.
+2. Instalar Docker y Docker Compose.
+3. Clonar el repositorio en el servidor y crear `.env.prod` a partir de `.env.example`.
+4. Ajustar `DOMAIN`, `MONGO_URL`, `SECRET_KEY`, Twilio y SMTP.
+5. Ejecutar `docker-compose -f docker-compose.prod.yml up --build -d`.
+6. Inicializar MongoDB con `docker-compose -f docker-compose.prod.yml exec backend python init_db.py`.
+7. Configurar DNS del dominio hacia la IP del Droplet y montar certificados TLS en Nginx.
+
+### 3. AWS EC2 con Docker Compose
+
+1. Crear una instancia EC2 Ubuntu con Security Group permitiendo 22, 80 y 443.
+2. Instalar Docker, Docker Compose y Git.
+3. Clonar el repositorio y copiar `.env.example` a `.env.prod`.
+4. Configurar variables del backend y URLs públicas del frontend.
+5. Levantar la plataforma con `docker-compose -f docker-compose.prod.yml up --build -d`.
+6. Ejecutar `docker-compose -f docker-compose.prod.yml exec backend python init_db.py`.
+7. Asociar Elastic IP, apuntar el dominio y configurar TLS/certificados para Nginx.
+
+```bash
 sudo apt update
 sudo apt install -y docker.io docker-compose
 sudo systemctl enable --now docker
-sudo usermod -aG docker $USER
-newgrp docker
-
-# 2. Clonar repositorio
-git clone https://github.com/cleangel196809/asistencia_grados_politecnico
-cd asistencia_grados_politecnico
-
-# 3. Configurar producción
-cp .env.example .env.prod
-nano .env.prod  # Editar con valores de producción
-
-# 4. Levantar en producción
-docker-compose -f docker-compose.prod.yml up -d
-
-# 5. Inicializar BD
+docker-compose -f docker-compose.prod.yml up --build -d
 docker-compose -f docker-compose.prod.yml exec backend python init_db.py
-
-# 6. Configurar SSL con Certbot
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d tudominio.com
-
-# 7. Configurar renovación automática de SSL
-echo "0 12 * * * /usr/bin/certbot renew --quiet" | sudo crontab -
 ```
 
 ---
@@ -232,10 +178,10 @@ La aplicación scanner funciona como PWA (Progressive Web App), instalable en cu
 
 1. **Crear Evento**: Menú → Eventos → "+ Crear Evento"
 2. **Cargar Participantes**: Menú → Participantes → Subir Excel
-   - Columnas requeridas: `No DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIONAL | COHORTE | PROMEDIO`
+   - Columnas requeridas: `No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIONAL | COHORTE | PROMEDIO`
 3. **Generar QR**: Menú → Gestión QR → "Generar QR Masivo"
 4. **Enviar QR**: WhatsApp masivo o Email masivo desde Gestión QR
-5. **Reportes**: Descargar Excel de asistencia y pendientes
+5. **Reportes**: Descargar informe final con hojas de asistidos y pendientes
 
 ### 🟡 Logístico
 

@@ -14,9 +14,11 @@ async def send_email_qr(
     from_email: Optional[str],
     smtp_config: Optional[dict],
     nombre: str,
+    event_name: str,
     numero_boleta: int,
     total_boletas: int,
     fecha: str,
+    horario: str,
     lugar: str,
     qr_image_b64: str,
     qr_id: str,
@@ -46,23 +48,29 @@ async def send_email_qr(
 
         html_content = f"""
         <html>
-        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background: #1e3a5f; color: white; padding: 20px; text-align: center;">
-                <h1>Politécnico Internacional</h1>
-                <h2>Ceremonia de Grado</h2>
+        <body style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; background: #f5f7fb;">
+            <div style="background: #1e3a5f; color: white; padding: 24px; text-align: center; border-radius: 16px 16px 0 0;">
+                <h1 style="margin: 0;">Politécnico Internacional</h1>
+                <p style="margin: 8px 0 0;">Invitación oficial de grado</p>
             </div>
-            <div style="padding: 20px;">
-                <p>Estimado/a <strong>{nombre}</strong>,</p>
-                <p>Nos complace invitarle a la Ceremonia de Grado del Politécnico Internacional.</p>
-                <p><strong>Fecha:</strong> {fecha}</p>
-                <p><strong>Lugar:</strong> {lugar}</p>
-                <p><strong>Boleta:</strong> #{numero_boleta} de {total_boletas}</p>
-                <p>Presente este código QR en la entrada:</p>
-                <div style="text-align: center; margin: 20px 0;">
-                    <img src="cid:qrcode" alt="Código QR" style="width: 200px; height: 200px;"/>
+            <div style="padding: 24px; background: white; border: 1px solid #dbe4f0; border-top: 0; border-radius: 0 0 16px 16px;">
+                <p style="font-size: 28px; font-weight: bold; color: #1e3a5f; margin: 0 0 16px;">{nombre}</p>
+                <p style="margin: 0 0 16px;">¡Bienvenido! Nos complace invitarte al evento de grado del Politécnico Internacional.</p>
+                <div style="background: #f8fafc; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+                    <p style="margin: 0 0 8px;"><strong>Evento:</strong> {event_name}</p>
+                    <p style="margin: 0 0 8px;"><strong>Fecha:</strong> {fecha}</p>
+                    <p style="margin: 0 0 8px;"><strong>Hora:</strong> {horario}</p>
+                    <p style="margin: 0;"><strong>Lugar / sede:</strong> {lugar}</p>
                 </div>
-                <p style="color: #666; font-size: 12px;">Este código QR es único e intransferible. No lo comparta.</p>
-                <p style="color: #666; font-size: 12px;">Código: {qr_id}</p>
+                <p style="font-size: 18px; font-weight: bold; text-align: center; margin: 0 0 16px;">Boleta {numero_boleta} de {total_boletas}</p>
+                <div style="text-align: center; margin: 20px 0;">
+                    <img src="cid:qrcode" alt="Código QR" style="width: 220px; height: 220px;"/>
+                </div>
+                <p style="text-align: center; margin: 0 0 20px;">Presenta este código al ingreso para validar tu invitación.</p>
+                <div style="font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 16px;">
+                    <p style="margin: 0 0 4px;">Código interno: {qr_id}</p>
+                    <p style="margin: 0;">Presente este código en la entrada. Uso único.</p>
+                </div>
             </div>
         </body>
         </html>

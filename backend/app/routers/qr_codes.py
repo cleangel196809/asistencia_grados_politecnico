@@ -26,6 +26,7 @@ class SendEmailRequest(BaseModel):
     evento_id: str
     from_email: Optional[str] = None
     smtp_config: Optional[dict] = None
+    qr_id: Optional[str] = None
 
 
 def ensure_roles(current_user: dict, allowed_roles: list[str]):
@@ -60,6 +61,24 @@ async def build_qr_document(participant: dict, event: dict, boleta_num: int) -> 
         "enviado_email": False,
         "created_at": datetime.utcnow(),
     }
+
+
+def format_event_schedule(event: dict) -> str:
+    horario = event.get("horario") or []
+    if horario:
+        first_slot = horario[0]
+        description = first_slot.get("descripcion")
+        hours = " - ".join(filter(None, [first_slot.get("hora_inicio"), first_slot.get("hora_fin")]))
+        return " | ".join(filter(None, [description, hours])) or "Por confirmar"
+
+    fecha = event.get("fecha")
+    if not fecha:
+        return "Por confirmar"
+
+    fecha_str = str(fecha)
+    if "T" in fecha_str:
+        return fecha_str.split("T", 1)[1][:5]
+    return fecha_str
 
 
 @router.post("/generate/{evento_id}")
@@ -168,9 +187,11 @@ async def send_whatsapp_mass(request: SendWhatsAppRequest, current_user=Depends(
                 to_number=participant.get("tel1", ""),
                 from_number=request.from_number,
                 nombre=participant.get("apellidos_nombres", ""),
+                event_name=event.get("nombre", "Ceremonia de Grado"),
                 numero_boleta=qr["numero_boleta"],
                 total_boletas=qr["total_boletas"],
                 fecha=str(event.get("fecha", "")),
+                horario=format_event_schedule(event),
                 lugar=event.get("lugar", ""),
                 qr_image_b64=qr.get("imagen_qr_base64", ""),
                 qr_id=qr["qr_id"],
@@ -189,14 +210,18 @@ async def send_whatsapp_mass(request: SendWhatsAppRequest, current_user=Depends(
 
 @router.post("/send-email")
 async def send_email_mass(request: SendEmailRequest, current_user=Depends(get_current_user)):
-    ensure_roles(current_user, ["admin"])
+    ensure_roles(current_user, ["admin", "logistico"] if request.qr_id else ["admin"])
 
     db = get_db()
     event = await db.events.find_one({"_id": parse_object_id(request.evento_id, "Event")})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    qr_codes = await db.qr_codes.find({"evento_id": request.evento_id, "enviado_email": False}).to_list(None)
+    qr_query = {"evento_id": request.evento_id, "enviado_email": False}
+    if request.qr_id:
+        qr_query["qr_id"] = request.qr_id
+
+    qr_codes = await db.qr_codes.find(qr_query).to_list(None)
 
     sent_count = 0
     for qr in qr_codes:
@@ -210,9 +235,11 @@ async def send_email_mass(request: SendEmailRequest, current_user=Depends(get_cu
                 from_email=request.from_email,
                 smtp_config=request.smtp_config,
                 nombre=participant.get("apellidos_nombres", ""),
+                event_name=event.get("nombre", "Ceremonia de Grado"),
                 numero_boleta=qr["numero_boleta"],
                 total_boletas=qr["total_boletas"],
                 fecha=str(event.get("fecha", "")),
+                horario=format_event_schedule(event),
                 lugar=event.get("lugar", ""),
                 qr_image_b64=qr.get("imagen_qr_base64", ""),
                 qr_id=qr["qr_id"],
@@ -250,9 +277,11 @@ async def send_individual_whatsapp(qr_id_param: str, current_user=Depends(get_cu
         to_number=participant.get("tel1", ""),
         from_number=None,
         nombre=participant.get("apellidos_nombres", ""),
+        event_name=event.get("nombre", "Ceremonia de Grado"),
         numero_boleta=qr["numero_boleta"],
         total_boletas=qr["total_boletas"],
         fecha=str(event.get("fecha", "")),
+        horario=format_event_schedule(event),
         lugar=event.get("lugar", ""),
         qr_image_b64=qr.get("imagen_qr_base64", ""),
         qr_id=qr["qr_id"],

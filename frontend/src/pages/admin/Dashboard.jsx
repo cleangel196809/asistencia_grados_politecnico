@@ -92,13 +92,14 @@ const AdminDashboard = () => {
           <table className="min-w-full border border-gray-200 text-sm">
             <thead>
               <tr className="bg-blue-50">
-                {['No DOCUMENTO', 'SEDE', 'PROGRAMA', 'APELLIDOS Y NOMBRES', 'TEL1', 'EMAIL INSTITUCIONAL', 'COHORTE', 'PROMEDIO'].map(col => (
+                {['No', 'DOCUMENTO', 'SEDE', 'PROGRAMA', 'APELLIDOS Y NOMBRES', 'TEL1', 'EMAIL INSTITUCIONAL', 'COHORTE', 'PROMEDIO'].map(col => (
                   <th key={col} className="border border-gray-200 px-3 py-2 text-left font-semibold text-blue-800">{col}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               <tr className="text-gray-500 italic">
+                <td className="border border-gray-200 px-3 py-2">1</td>
                 <td className="border border-gray-200 px-3 py-2">123456789</td>
                 <td className="border border-gray-200 px-3 py-2">Bogotá</td>
                 <td className="border border-gray-200 px-3 py-2">Ingeniería de Sistemas</td>
