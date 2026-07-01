@@ -64,6 +64,7 @@ async def build_qr_document(participant: dict, event: dict, boleta_num: int) -> 
 
 
 def format_event_schedule(event: dict) -> str:
+    """Return a human-readable schedule using horario first, then fecha time, then a fallback."""
     horario = event.get("horario") or []
     if horario:
         first_slot = horario[0]

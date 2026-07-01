@@ -60,7 +60,7 @@ async def send_email_qr(
                     <p style="margin: 0 0 8px;"><strong>Evento:</strong> {event_name}</p>
                     <p style="margin: 0 0 8px;"><strong>Fecha:</strong> {fecha}</p>
                     <p style="margin: 0 0 8px;"><strong>Hora:</strong> {horario}</p>
-                    <p style="margin: 0;"><strong>Lugar / sede:</strong> {lugar}</p>
+                    <p style="margin: 0;"><strong>Ubicación:</strong> {lugar}</p>
                 </div>
                 <p style="font-size: 18px; font-weight: bold; text-align: center; margin: 0 0 16px;">Boleta {numero_boleta} de {total_boletas}</p>
                 <div style="text-align: center; margin: 20px 0;">

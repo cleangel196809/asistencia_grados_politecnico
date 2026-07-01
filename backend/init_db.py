@@ -12,6 +12,7 @@ load_dotenv()
 
 
 def env_value(*names: str, default: str) -> str:
+    """Return the first non-empty value among the provided environment variable names."""
     for name in names:
         value = os.getenv(name)
         if value:
