@@ -105,7 +105,7 @@ async def upload_participants(
             "tel1": str(row.get("tel1", "")).strip(),
             "email_institucional": str(row.get("email_institucional", "")).strip(),
             "cohorte": str(row.get("cohorte", "")).strip(),
-            "promedio": float(row.get("promedio", 0.0) or 0.0),
+            "promedio": float(row.get("promedio", 0.0)),
             "num_invitados": num_invitados,
             "created_at": datetime.utcnow(),
         }

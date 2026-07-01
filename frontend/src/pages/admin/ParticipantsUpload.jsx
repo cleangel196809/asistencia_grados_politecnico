@@ -105,7 +105,7 @@ const ParticipantsUpload = () => {
 
         {preview.length > 0 && (
           <div className="mt-4">
-            <p className="text-sm font-medium text-gray-700 mb-2">Vista previa (primeras filas):</p>
+            <p className="text-sm font-medium text-gray-700 mb-2">Formato esperado del Excel:</p>
             <div className="overflow-x-auto">
               <table className="min-w-full text-xs border">
                 <thead className="bg-gray-50">

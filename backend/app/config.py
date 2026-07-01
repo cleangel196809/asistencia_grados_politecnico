@@ -1,3 +1,4 @@
+import secrets
 from typing import Optional
 
 from pydantic import AliasChoices, Field
@@ -13,7 +14,7 @@ class Settings(BaseSettings):
         default="politecnico_grados",
         validation_alias=AliasChoices("MONGODB_DB", "DB_NAME"),
     )
-    SECRET_KEY: str = "cambiar_esta_clave_en_produccion_muy_larga_y_segura"
+    SECRET_KEY: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
     MAIL_USERNAME: Optional[str] = Field(

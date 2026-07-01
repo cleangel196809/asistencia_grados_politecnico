@@ -92,9 +92,9 @@ async def send_email_qr(
             hostname=host,
             port=port,
             username=username,
-            **{"password": password},
+            password=password,
             use_tls=False,
-            start_tls=True,
+                        start_tls=True,
         )
 
         return True
