@@ -1278,7 +1278,20 @@ function LogisticsPage({ user, onLogout }) {
         </div>
         <button onClick={() => onLogout(null)}>Cerrar sesión</button>
       </div>
-      {status && <div className="badge">{status}</div>}
+      {status && (
+        <div
+          className="badge"
+          style={{
+            position: 'sticky',
+            top: '0.5rem',
+            zIndex: 20,
+            boxShadow: '0 4px 12px rgba(15, 23, 42, 0.15)',
+            ...(/no fue posible|error|inválid|no se pudo/i.test(status) ? { background: '#fee2e2', color: '#991b1b' } : {}),
+          }}
+        >
+          {status}
+        </div>
+      )}
 
       <section className="card">
         <h2>Consultar ingreso por cédula</h2>

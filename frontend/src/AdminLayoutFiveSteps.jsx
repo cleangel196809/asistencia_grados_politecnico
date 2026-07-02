@@ -30,10 +30,25 @@ export default function AdminLayoutFiveSteps({
     [onLogout, user?.role],
   );
 
+  const isErrorStatus = Boolean(status) && /no fue posible|error|inválid|no se pudo/i.test(status);
+
   return (
     <div className="page">
       {header}
-      {status ? <div className="badge">{status}</div> : null}
+      {status ? (
+        <div
+          className="badge"
+          style={{
+            position: 'sticky',
+            top: '0.5rem',
+            zIndex: 20,
+            boxShadow: '0 4px 12px rgba(15, 23, 42, 0.15)',
+            ...(isErrorStatus ? { background: '#fee2e2', color: '#991b1b' } : {}),
+          }}
+        >
+          {status}
+        </div>
+      ) : null}
       {banner}
 
       <div className="card-grid">
