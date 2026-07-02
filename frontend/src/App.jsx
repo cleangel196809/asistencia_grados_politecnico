@@ -8,6 +8,60 @@ import { registerSW } from 'virtual:pwa-register';
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
 });
+
+const AUTH_STORAGE_KEY = 'attendance_auth';
+let currentToken = null;
+
+api.interceptors.request.use((config) => {
+  if (currentToken) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${currentToken}`;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      currentToken = null;
+      localStorage.removeItem(AUTH_STORAGE_KEY);
+      if (window.location.pathname !== '/') {
+        window.location.href = '/';
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
+function loadStoredAuth() {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.token) {
+      currentToken = parsed.token;
+      return { username: parsed.username, role: parsed.role };
+    }
+  } catch (error) {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+  }
+  return null;
+}
+
+function persistAuth(data) {
+  currentToken = data.access_token;
+  localStorage.setItem(
+    AUTH_STORAGE_KEY,
+    JSON.stringify({ token: data.access_token, username: data.username, role: data.role }),
+  );
+}
+
+function clearAuth() {
+  currentToken = null;
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
 const PARTICIPANTS_PREFIX = 'participants:';
 const QUEUE_KEY = 'attendance-queue';
 const ROLE_ADMIN = 'ADMIN';
@@ -1434,11 +1488,21 @@ function RoleDashboard({ user, onLogout }) {
 }
 
 function App() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => loadStoredAuth());
 
   useEffect(() => {
     registerSW({ immediate: true });
   }, []);
+
+  const handleLogin = (data) => {
+    persistAuth(data);
+    setUser({ username: data.username, role: data.role });
+  };
+
+  const handleLogout = () => {
+    clearAuth();
+    setUser(null);
+  };
 
   return (
     <div className="app-shell">
@@ -1452,11 +1516,11 @@ function App() {
         </div>
       </nav>
       <Routes>
-        <Route path="/" element={user ? <RoleDashboard user={user} onLogout={setUser} /> : <LoginScreen onLogin={setUser} />} />
-        <Route path="/login" element={<LoginScreen onLogin={setUser} />} />
-        <Route path="/admin" element={user?.role === ROLE_ADMIN ? <AdminPage user={user} onLogout={setUser} /> : <LoginScreen onLogin={setUser} />} />
-        <Route path="/logistico" element={user?.role === ROLE_LOGISTICO ? <LogisticsPage user={user} onLogout={setUser} /> : <LoginScreen onLogin={setUser} />} />
-        <Route path="/scanner" element={user?.role === ROLE_SCANNER ? <ScannerPage user={user} onLogout={setUser} /> : <LoginScreen onLogin={setUser} />} />
+        <Route path="/" element={user ? <RoleDashboard user={user} onLogout={handleLogout} /> : <LoginScreen onLogin={handleLogin} />} />
+        <Route path="/login" element={<LoginScreen onLogin={handleLogin} />} />
+        <Route path="/admin" element={user?.role === ROLE_ADMIN ? <AdminPage user={user} onLogout={handleLogout} /> : <LoginScreen onLogin={handleLogin} />} />
+        <Route path="/logistico" element={user?.role === ROLE_LOGISTICO ? <LogisticsPage user={user} onLogout={handleLogout} /> : <LoginScreen onLogin={handleLogin} />} />
+        <Route path="/scanner" element={user?.role === ROLE_SCANNER ? <ScannerPage user={user} onLogout={handleLogout} /> : <LoginScreen onLogin={handleLogin} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

@@ -74,6 +74,8 @@ cd backend
   - https enabled
   - `/api` proxy to backend on `127.0.0.1:8000`
 - Role flows must remain functional for ADMIN, LOGISTICO, and SCANNER.
+- Auth is real, not decorative: `POST /login` returns a JWT `access_token`; every route except `/health`, `/login`, and `/invitations/template/download` requires `Authorization: Bearer <token>` and is role-gated server-side via `Depends(require_role(...))` in `backend/app/auth.py`. Passwords are bcrypt-hashed (`backend/app/security.py`) — never compare plaintext against `password_hash`.
+- Tests that call protected endpoints via `TestClient` must send `headers=admin_headers`/`logistico_headers`/`scanner_headers` from `backend/tests/conftest.py`.
 
 ## Known Pitfalls
 
@@ -82,6 +84,7 @@ cd backend
   - `/events/{event_id}/qr/{participant_id}`
 - Mobile camera access may fail in insecure contexts. Preserve HTTPS local dev behavior for scanner testing.
 - PowerShell 5.1 can fail with some modern flags. Prefer `cmd /c` and `curl -k` for HTTPS local checks.
+- Without `JWT_SECRET_KEY` set in the environment, `backend/app/security.py` generates a random key per process — restarting the backend invalidates every existing session/token (frontend force-logs-out on the next 401). Set `JWT_SECRET_KEY` in `.env` to keep sessions across restarts.
 
 ## Change Safety Checklist
 

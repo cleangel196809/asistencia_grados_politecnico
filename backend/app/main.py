@@ -11,13 +11,15 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import qrcode
 from pypdf import PdfReader
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from app.auth import get_current_user, require_role
 from app.database import store
 from app.email_service import is_smtp_configured, send_bulk_invitation_emails, send_invitation_email
+from app.security import create_access_token
 from app.whatsapp_trello_service import program_whatsapp_cards_for_event
 
 
@@ -60,6 +62,7 @@ def program_whatsapp_trello(
     event_id: str,
     whatsapp_text: str = "",
     participant_ids: Optional[List[str]] = None,
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     """Programa envío WhatsApp masivo creando una Card por invitado en Trello."""
 
@@ -92,12 +95,12 @@ def program_whatsapp_trello(
 
 
 @app.get("/invitations/email/status")
-def email_status() -> Dict[str, Any]:
+def email_status(current_user: dict = Depends(get_current_user)) -> Dict[str, Any]:
     return {"configured": is_smtp_configured()}
 
 
 @app.post("/invitations/email/program")
-def program_email_bulk(body: EmailProgramRequest) -> Dict[str, Any]:
+def program_email_bulk(body: EmailProgramRequest, current_user: dict = Depends(require_role("ADMIN"))) -> Dict[str, Any]:
     """Envía correo real (SMTP) con QR adjunto a todos los invitados del evento (o a un subconjunto)."""
 
     event = store.get_event(body.event_id)
@@ -136,7 +139,10 @@ def program_email_bulk(body: EmailProgramRequest) -> Dict[str, Any]:
 
 
 @app.post("/invitations/email/individual")
-def send_email_individual(body: EmailIndividualRequest) -> Dict[str, Any]:
+def send_email_individual(
+    body: EmailIndividualRequest,
+    current_user: dict = Depends(require_role("ADMIN", "LOGISTICO")),
+) -> Dict[str, Any]:
     """Envía correo real (SMTP) con QR adjunto a un único invitado."""
 
     event = store.get_event(body.event_id)
@@ -221,18 +227,22 @@ def health() -> Dict[str, Any]:
 
 
 @app.get("/events")
-def list_events() -> List[Dict[str, Any]]:
+def list_events(current_user: dict = Depends(get_current_user)) -> List[Dict[str, Any]]:
     return store.list_events()
 
 
 @app.post("/events", response_model=Dict[str, Any])
-def create_event(body: EventCreate) -> Dict[str, Any]:
+def create_event(body: EventCreate, current_user: dict = Depends(require_role("ADMIN"))) -> Dict[str, Any]:
     event = store.create_event(body.model_dump())
     return event
 
 
 @app.put("/events/{event_id}")
-def update_event(event_id: str, body: EventCreate) -> Dict[str, Any]:
+def update_event(
+    event_id: str,
+    body: EventCreate,
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> Dict[str, Any]:
     updated = store.update_event(event_id, body.model_dump())
     if not updated:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -240,7 +250,7 @@ def update_event(event_id: str, body: EventCreate) -> Dict[str, Any]:
 
 
 @app.delete("/events/{event_id}")
-def delete_event(event_id: str) -> Dict[str, Any]:
+def delete_event(event_id: str, current_user: dict = Depends(require_role("ADMIN"))) -> Dict[str, Any]:
     deleted = store.delete_event(event_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -248,7 +258,7 @@ def delete_event(event_id: str) -> Dict[str, Any]:
 
 
 @app.get("/events/{event_id}/participants")
-def list_participants(event_id: str) -> List[Dict[str, Any]]:
+def list_participants(event_id: str, current_user: dict = Depends(get_current_user)) -> List[Dict[str, Any]]:
     participants = store.list_participants(event_id)
     attendances = store.list_attendances(event_id)
     participant_map = {}
@@ -267,18 +277,29 @@ def list_participants(event_id: str) -> List[Dict[str, Any]]:
 
 
 @app.post("/participants")
-def create_participant(body: ParticipantCreate) -> Dict[str, Any]:
+def create_participant(
+    body: ParticipantCreate,
+    current_user: dict = Depends(require_role("ADMIN", "LOGISTICO")),
+) -> Dict[str, Any]:
     participant = store.create_participant(body.model_dump())
     return participant
 
 
 @app.get("/participants/search")
-def search_participants(cedula: str, event_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def search_participants(
+    cedula: str,
+    event_id: Optional[str] = None,
+    current_user: dict = Depends(require_role("ADMIN", "LOGISTICO")),
+) -> List[Dict[str, Any]]:
     return store.search_participants(cedula, event_id)
 
 
 @app.put("/participants/{participant_id}")
-def update_participant(participant_id: str, body: ParticipantCreate) -> Dict[str, Any]:
+def update_participant(
+    participant_id: str,
+    body: ParticipantCreate,
+    current_user: dict = Depends(require_role("ADMIN", "LOGISTICO")),
+) -> Dict[str, Any]:
     updated = store.update_participant(participant_id, body.model_dump())
     if not updated:
         raise HTTPException(status_code=404, detail="Participant not found")
@@ -286,7 +307,7 @@ def update_participant(participant_id: str, body: ParticipantCreate) -> Dict[str
 
 
 @app.delete("/participants/{participant_id}")
-def delete_participant(participant_id: str) -> Dict[str, Any]:
+def delete_participant(participant_id: str, current_user: dict = Depends(require_role("ADMIN"))) -> Dict[str, Any]:
     deleted = store.delete_participant(participant_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Participant not found")
@@ -294,7 +315,11 @@ def delete_participant(participant_id: str) -> Dict[str, Any]:
 
 
 @app.post("/participants/import")
-async def import_participants(event_id: str, file: UploadFile = File(...)) -> Dict[str, Any]:
+async def import_participants(
+    event_id: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> Dict[str, Any]:
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only Excel files are allowed")
     df = pd.read_excel(file.file)
@@ -403,7 +428,10 @@ def parse_pdf_invitation_lines(raw_text: str) -> List[str]:
 
 
 @app.post("/invitations/template")
-async def upload_invitation_template(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def upload_invitation_template(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> Dict[str, Any]:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
@@ -422,7 +450,7 @@ async def upload_invitation_template(file: UploadFile = File(...)) -> Dict[str, 
 
 
 @app.get("/invitations/template")
-def get_invitation_template_status() -> Dict[str, Any]:
+def get_invitation_template_status(current_user: dict = Depends(get_current_user)) -> Dict[str, Any]:
     exists = TEMPLATE_FILE.exists()
     return {
         "exists": exists,
@@ -433,6 +461,9 @@ def get_invitation_template_status() -> Dict[str, Any]:
 
 @app.get("/invitations/template/download")
 def download_invitation_template() -> FileResponse:
+    # Sin auth a propósito: el frontend abre esta URL con window.open()/enlace
+    # directo, que no puede enviar el header Authorization. El PDF es solo la
+    # plantilla institucional de marca, no contiene datos de invitados.
     if not TEMPLATE_FILE.exists():
         raise HTTPException(status_code=404, detail="Invitation template not found")
     return FileResponse(
@@ -443,7 +474,10 @@ def download_invitation_template() -> FileResponse:
 
 
 @app.post("/participants/import-pdf-preview")
-async def import_participants_pdf_preview(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def import_participants_pdf_preview(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> Dict[str, Any]:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
@@ -479,16 +513,22 @@ def login_user(body: UserLogin) -> Dict[str, Any]:
     user = store.validate_user(body.username, body.password, body.role)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    return {"username": user["username"], "role": user["role"]}
+    access_token = create_access_token(data={"sub": user["username"]})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user["username"],
+        "role": user["role"],
+    }
 
 
 @app.get("/users")
-def list_users() -> List[Dict[str, Any]]:
+def list_users(current_user: dict = Depends(require_role("ADMIN"))) -> List[Dict[str, Any]]:
     return store.list_users()
 
 
 @app.delete("/users/{user_id}")
-def delete_user(user_id: str) -> Dict[str, Any]:
+def delete_user(user_id: str, current_user: dict = Depends(require_role("ADMIN"))) -> Dict[str, Any]:
     deleted = store.delete_user(user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
@@ -496,7 +536,7 @@ def delete_user(user_id: str) -> Dict[str, Any]:
 
 
 @app.post("/users")
-def create_user(body: UserCreate) -> Dict[str, Any]:
+def create_user(body: UserCreate, current_user: dict = Depends(require_role("ADMIN"))) -> Dict[str, Any]:
     try:
         user = store.create_user(body.model_dump())
     except ValueError as exc:
@@ -505,7 +545,11 @@ def create_user(body: UserCreate) -> Dict[str, Any]:
 
 
 @app.put("/users/{user_id}")
-def update_user(user_id: str, body: UserUpdate) -> Dict[str, Any]:
+def update_user(
+    user_id: str,
+    body: UserUpdate,
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> Dict[str, Any]:
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
     if not changes:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -538,7 +582,7 @@ def build_qr_tickets(event_id: str, participant: Dict[str, Any]) -> List[Dict[st
 
 
 @app.get("/events/{event_id}/qr/bulk")
-def generate_bulk_qr(event_id: str) -> Dict[str, Any]:
+def generate_bulk_qr(event_id: str, current_user: dict = Depends(require_role("ADMIN"))) -> Dict[str, Any]:
     event = store.get_event(event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -552,7 +596,11 @@ def generate_bulk_qr(event_id: str) -> Dict[str, Any]:
 
 
 @app.get("/events/{event_id}/qr/{participant_id}")
-def generate_qr(event_id: str, participant_id: str) -> Dict[str, Any]:
+def generate_qr(
+    event_id: str,
+    participant_id: str,
+    current_user: dict = Depends(require_role("ADMIN", "LOGISTICO")),
+) -> Dict[str, Any]:
     participant = store.get_participant(participant_id)
     if not participant or participant.get("event_id") != event_id:
         raise HTTPException(status_code=404, detail="Participant not found for the selected event")
@@ -561,7 +609,10 @@ def generate_qr(event_id: str, participant_id: str) -> Dict[str, Any]:
 
 
 @app.post("/attendance/scan")
-async def scan_attendance(body: AttendanceScan) -> Dict[str, Any]:
+async def scan_attendance(
+    body: AttendanceScan,
+    current_user: dict = Depends(require_role("ADMIN", "SCANNER")),
+) -> Dict[str, Any]:
     payload = json.loads(body.payload)
     participant = store.get_participant(payload["participant_id"])
     if not participant or participant.get("event_id") != body.event_id:
@@ -591,12 +642,12 @@ async def scan_attendance(body: AttendanceScan) -> Dict[str, Any]:
 
 
 @app.get("/attendances/{event_id}")
-def list_attendances(event_id: str) -> List[Dict[str, Any]]:
+def list_attendances(event_id: str, current_user: dict = Depends(get_current_user)) -> List[Dict[str, Any]]:
     return store.list_attendances(event_id)
 
 
 @app.get("/events/{event_id}/report")
-def event_report(event_id: str):
+def event_report(event_id: str, current_user: dict = Depends(require_role("ADMIN"))):
     event = store.get_event(event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -651,6 +702,9 @@ def event_report(event_id: str):
 
 @app.websocket("/ws/attendances")
 async def websocket_attendances(websocket: WebSocket) -> None:
+    # Sin auth a propósito: el frontend actual no se conecta a este canal.
+    # Si se conecta en el futuro, pasar el JWT como query param (?token=...)
+    # y validarlo con decode_access_token antes de accept().
     await websocket.accept()
     connected_clients.add(websocket)
     try:

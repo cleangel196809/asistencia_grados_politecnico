@@ -158,8 +158,12 @@ Backend:
 1. `MONGO_URI` (si usas MongoDB real)
 2. `MONGO_DB` (nombre de base)
 3. `CORS_ORIGINS` (dominios frontend permitidos)
+4. `JWT_SECRET_KEY` (clave de firma de sesion; si no la defines, se genera una nueva en cada reinicio y todos deberan volver a iniciar sesion)
+5. `ACCESS_TOKEN_EXPIRE_MINUTES` (duracion de la sesion, por defecto 480 = 8 horas)
 
 Si no defines MongoDB, el backend usa modo `mock` para desarrollo.
+
+El login ahora devuelve un token JWT ademas del usuario/rol; cada endpoint (salvo `/health`, `/login` y la descarga de la plantilla PDF) exige ese token y valida el rol en el servidor, no solo en la pantalla.
 
 ## 10. Solucion de problemas
 

@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from app.security import hash_password, verify_password
+
 try:
     import mongomock
 except ImportError:  # pragma: no cover
@@ -75,9 +77,9 @@ class AttendanceStore:
         if self.db.users.count_documents({}) == 0:
             self.db.users.insert_many(
                 [
-                    {"id": str(uuid.uuid4()), "username": "admin", "password": "admin123", "role": "ADMIN", "created_at": datetime.utcnow().isoformat()},
-                    {"id": str(uuid.uuid4()), "username": "logistico", "password": "logis123", "role": "LOGISTICO", "created_at": datetime.utcnow().isoformat()},
-                    {"id": str(uuid.uuid4()), "username": "scanner", "password": "scanner123", "role": "SCANNER", "created_at": datetime.utcnow().isoformat()},
+                    {"id": str(uuid.uuid4()), "username": "admin", "password_hash": hash_password("admin123"), "role": "ADMIN", "created_at": datetime.utcnow().isoformat()},
+                    {"id": str(uuid.uuid4()), "username": "logistico", "password_hash": hash_password("logis123"), "role": "LOGISTICO", "created_at": datetime.utcnow().isoformat()},
+                    {"id": str(uuid.uuid4()), "username": "scanner", "password_hash": hash_password("scanner123"), "role": "SCANNER", "created_at": datetime.utcnow().isoformat()},
                 ]
             )
 
@@ -148,15 +150,18 @@ class AttendanceStore:
         return self.db.attendances.find_one({"event_id": event_id, "participant_id": participant_id})
 
     def list_users(self) -> List[Dict[str, Any]]:
-        return self._clean_documents(list(self.db.users.find({}, {"password": 0}).sort("username", 1)))
+        return self._clean_documents(list(self.db.users.find({}, {"password_hash": 0}).sort("username", 1)))
 
     def create_user(self, user: Dict[str, Any]) -> Dict[str, Any]:
         existing = self.db.users.find_one({"username": user["username"]})
         if existing:
             raise ValueError("User already exists")
         record = {**user, "id": user.get("id") or str(uuid.uuid4()), "created_at": datetime.utcnow().isoformat()}
+        plain_password = record.pop("password", None)
+        if plain_password:
+            record["password_hash"] = hash_password(plain_password)
         self.db.users.insert_one(record)
-        return self._clean_document(record)
+        return self._clean_document({k: v for k, v in record.items() if k != "password_hash"})
 
     def delete_user(self, user_id: str) -> bool:
         result = self.db.users.delete_one({"id": user_id})
@@ -166,15 +171,28 @@ class AttendanceStore:
         existing = self.db.users.find_one({"id": user_id})
         if not existing:
             return None
+        changes = dict(changes)
+        plain_password = changes.pop("password", None)
+        if plain_password:
+            changes["password_hash"] = hash_password(plain_password)
         self.db.users.update_one({"id": user_id}, {"$set": changes})
-        updated = self.db.users.find_one({"id": user_id}, {"password": 0})
+        updated = self.db.users.find_one({"id": user_id}, {"password_hash": 0})
         return self._clean_document(updated)
 
     def validate_user(self, username: str, password: str, role: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        query = {"username": username, "password": password}
+        query = {"username": username}
         if role:
             query["role"] = role.upper()
-        return self._clean_document(self.db.users.find_one(query, {"password": 0}))
+        user = self.db.users.find_one(query)
+        if not user or not verify_password(password, user.get("password_hash", "")):
+            return None
+        return self._clean_document({k: v for k, v in user.items() if k != "password_hash"})
+
+    def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        user = self.db.users.find_one({"username": username})
+        if not user:
+            return None
+        return self._clean_document({k: v for k, v in user.items() if k != "password_hash"})
 
     def search_participants(self, cedula: str, event_id: Optional[str] = None) -> List[Dict[str, Any]]:
         query = {"cedula": cedula}
