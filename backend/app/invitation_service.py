@@ -1,8 +1,9 @@
 import base64
+import functools
 import io
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import fitz
 from PIL import Image, ImageDraw, ImageFont
@@ -58,23 +59,48 @@ def save_layout(changes: Dict[str, Any]) -> Dict[str, Any]:
     return layout
 
 
-def _load_base_image() -> Image.Image:
+def _load_base_image(dpi: int = RENDER_DPI) -> Image.Image:
     doc = fitz.open(TEMPLATE_FILE)
     try:
         page = doc[0]
-        pix = page.get_pixmap(dpi=RENDER_DPI, alpha=False)
+        pix = page.get_pixmap(dpi=dpi, alpha=False)
         return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
     finally:
         doc.close()
 
 
-def _find_font(size: int) -> ImageFont.FreeTypeFont:
+def _dpi_for_width(target_width_px: int) -> int:
+    """DPI necesario para que la plantilla rasterice directamente al ancho deseado,
+    evitando renderizar a alta resolución y luego reescalar (muy costoso con
+    cientos de páginas)."""
+    doc = fitz.open(TEMPLATE_FILE)
+    try:
+        page_width_pt = doc[0].rect.width
+    finally:
+        doc.close()
+    return max(36, int(target_width_px / page_width_pt * 72))
+
+
+@functools.lru_cache(maxsize=1)
+def _resolve_font_path() -> Optional[str]:
+    """Busca la fuente disponible una sola vez (evita golpear el disco por cada invitación)."""
     for path in _FONT_CANDIDATES:
         if Path(path).exists():
-            try:
-                return ImageFont.truetype(path, size=size)
-            except Exception:
-                continue
+            return path
+    return None
+
+
+@functools.lru_cache(maxsize=64)
+def _find_font(size: int) -> ImageFont.FreeTypeFont:
+    """Fuente cacheada por tamaño: sin esto, generar un documento con cientos de
+    invitaciones vuelve a parsear el .ttf desde disco en cada una y se vuelve
+    inutilizable (de segundos a minutos)."""
+    path = _resolve_font_path()
+    if path:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
+            pass
     return ImageFont.load_default()
 
 
@@ -97,19 +123,10 @@ def _decode_qr_bytes(qr_image_data_uri: str) -> bytes:
     return base64.b64decode(qr_image_data_uri)
 
 
-def compose_invitation_image(
-    *,
-    participant_name: str,
-    qr_image_bytes: bytes,
-    layout: Optional[Dict[str, Any]] = None,
-) -> bytes:
-    if not is_template_available():
-        raise FileNotFoundError("No hay plantilla PDF cargada. Súbela primero en el panel administrador.")
-
-    layout = layout or load_layout()
-    base = _load_base_image()
-    width, height = base.size
-    draw = ImageDraw.Draw(base)
+def _draw_invitation(base_image: Image.Image, *, participant_name: str, qr_image_bytes: bytes, layout: Dict[str, Any]) -> Image.Image:
+    page = base_image.copy()
+    width, height = page.size
+    draw = ImageDraw.Draw(page)
 
     name_cfg = layout["name"]
     text = (participant_name or "").strip() or "Invitado"
@@ -126,10 +143,25 @@ def compose_invitation_image(
     qr_image = qr_image.resize((qr_size, qr_size))
     qr_x = int(width * float(qr_cfg.get("x", 0.5)) - qr_size / 2)
     qr_y = int(height * float(qr_cfg.get("y", 0.665)))
-    base.paste(qr_image, (qr_x, qr_y), qr_image)
+    page.paste(qr_image, (qr_x, qr_y), qr_image)
+    return page
+
+
+def compose_invitation_image(
+    *,
+    participant_name: str,
+    qr_image_bytes: bytes,
+    layout: Optional[Dict[str, Any]] = None,
+) -> bytes:
+    if not is_template_available():
+        raise FileNotFoundError("No hay plantilla PDF cargada. Súbela primero en el panel administrador.")
+
+    layout = layout or load_layout()
+    base = _load_base_image()
+    page = _draw_invitation(base, participant_name=participant_name, qr_image_bytes=qr_image_bytes, layout=layout)
 
     buffer = io.BytesIO()
-    base.save(buffer, format="PNG")
+    page.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -142,3 +174,41 @@ def compose_invitation_data_uri(
     qr_bytes = _decode_qr_bytes(qr_image_data_uri)
     composed = compose_invitation_image(participant_name=participant_name, qr_image_bytes=qr_bytes, layout=layout)
     return "data:image/png;base64," + base64.b64encode(composed).decode("ascii")
+
+
+def build_invitations_document(
+    items: List[Dict[str, Any]],
+    *,
+    layout: Optional[Dict[str, Any]] = None,
+    max_width: int = 700,
+) -> bytes:
+    """Arma un PDF de varias páginas (una invitación por página) para revisión rápida.
+
+    items: [{"participant_name": str, "qr_image_bytes": bytes}, ...]
+    Reutiliza la plantilla ya renderizada una sola vez (no una vez por invitado),
+    para que generar el documento con muchos invitados sea rápido.
+    """
+    if not is_template_available():
+        raise FileNotFoundError("No hay plantilla PDF cargada. Súbela primero en el panel administrador.")
+    if not items:
+        raise ValueError("No hay invitaciones para incluir en el documento.")
+
+    layout = layout or load_layout()
+    # Renderiza la plantilla directamente al tamaño final del documento: evita
+    # reescalar una imagen de alta resolución cientos de veces (era el 75% del
+    # tiempo total con rosters grandes).
+    base = _load_base_image(dpi=_dpi_for_width(max_width))
+
+    pages = []
+    for item in items:
+        page = _draw_invitation(
+            base,
+            participant_name=item.get("participant_name", ""),
+            qr_image_bytes=item["qr_image_bytes"],
+            layout=layout,
+        )
+        pages.append(page.convert("RGB"))
+
+    buffer = io.BytesIO()
+    pages[0].save(buffer, format="PDF", save_all=True, append_images=pages[1:])
+    return buffer.getvalue()

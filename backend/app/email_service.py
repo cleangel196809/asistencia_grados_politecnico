@@ -38,7 +38,7 @@ def _build_message(*, to_address: str, subject: str, body_text: str, qr_images: 
             image_bytes,
             maintype="image",
             subtype="png",
-            filename=f"qr_{index}.png",
+            filename=f"invitacion_{index}.png",
         )
     return message
 

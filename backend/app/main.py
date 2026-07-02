@@ -26,6 +26,7 @@ from app.auth import get_current_user, require_role
 from app.database import store
 from app.email_service import is_smtp_configured, send_bulk_invitation_emails, send_invitation_email
 from app.invitation_service import (
+    build_invitations_document,
     compose_invitation_data_uri,
     is_template_available,
     load_layout,
@@ -125,16 +126,18 @@ def program_email_bulk(body: EmailProgramRequest, current_user: dict = Depends(r
         participants = [p for p in participants if p.get("id") in participant_ids_set]
 
     subject = body.subject or f"Invitación a {event.get('name', 'evento')}"
+    layout = load_layout()
     recipients = []
     for p in participants:
         if not p.get("email"):
             continue
-        tickets = build_qr_tickets(body.event_id, p)
+        attachments = build_invitation_attachments(body.event_id, p, layout=layout)
+        ticket_word = "invitación" if len(attachments) == 1 else "invitaciones"
         body_text = (
             f"{body.body_text}\n\n"
             f"Hola {p.get('name', '')}, te invitamos al evento {event.get('name', '')} "
             f"en {event.get('location', '')} el {event.get('date', '')}.\n\n"
-            "Adjuntamos tu(s) código(s) QR de ingreso."
+            f"Adjuntamos tu(s) {len(attachments)} {ticket_word} de ingreso, cada una con su código QR único."
         ).strip()
         recipients.append(
             {
@@ -142,7 +145,7 @@ def program_email_bulk(body: EmailProgramRequest, current_user: dict = Depends(r
                 "to_address": p.get("email"),
                 "subject": subject,
                 "body_text": body_text,
-                "qr_images": tickets,
+                "qr_images": attachments,
             }
         )
 
@@ -165,20 +168,21 @@ def send_email_individual(
     if not participant or participant.get("event_id") != body.event_id:
         raise HTTPException(status_code=404, detail="Participant not found for the selected event")
 
-    tickets = build_qr_tickets(body.event_id, participant)
+    attachments = build_invitation_attachments(body.event_id, participant)
     subject = body.subject or f"Invitación a {event.get('name', 'evento')}"
+    ticket_word = "invitación" if len(attachments) == 1 else "invitaciones"
     body_text = (
         f"{body.body_text}\n\n"
         f"Hola {participant.get('name', '')}, te invitamos al evento {event.get('name', '')} "
         f"en {event.get('location', '')} el {event.get('date', '')}.\n\n"
-        "Adjuntamos tu(s) código(s) QR de ingreso."
+        f"Adjuntamos tu(s) {len(attachments)} {ticket_word} de ingreso, cada una con su código QR único."
     ).strip()
 
     result = send_invitation_email(
         to_address=participant.get("email", ""),
         subject=subject,
         body_text=body_text,
-        qr_images=tickets,
+        qr_images=attachments,
     )
     return result
 
@@ -643,6 +647,36 @@ def build_qr_tickets(event_id: str, participant: Dict[str, Any]) -> List[Dict[st
     return tickets
 
 
+def build_invitation_attachments(
+    event_id: str,
+    participant: Dict[str, Any],
+    layout: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Un adjunto por cada boleta a la que tiene derecho el participante.
+
+    Si hay plantilla PDF cargada, cada adjunto es la invitación completa
+    (nombre + QR ya combinados sobre la plantilla). Si no hay plantilla,
+    se usa el QR simple como respaldo para no romper el envío de correo.
+    """
+    tickets = build_qr_tickets(event_id, participant)
+    if not is_template_available():
+        return tickets
+
+    layout = layout or load_layout()
+    attachments = []
+    for ticket in tickets:
+        try:
+            composed_image = compose_invitation_data_uri(
+                participant_name=participant.get("name", ""),
+                qr_image_data_uri=ticket["image"],
+                layout=layout,
+            )
+            attachments.append({**ticket, "image": composed_image})
+        except Exception:
+            attachments.append(ticket)
+    return attachments
+
+
 @app.get("/events/{event_id}/qr/bulk")
 def generate_bulk_qr(event_id: str, current_user: dict = Depends(require_role("ADMIN"))) -> Dict[str, Any]:
     event = store.get_event(event_id)
@@ -699,6 +733,67 @@ def generate_composed_invitation(
         for ticket in tickets
     ]
     return {"participant": participant, "invitations": invitations}
+
+
+@app.get("/events/{event_id}/invitations/document")
+def generate_invitations_document(
+    event_id: str,
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> StreamingResponse:
+    """PDF con una página por invitación (nombre + QR) de todo el evento, para verificar de un vistazo."""
+
+    event = store.get_event(event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    if not is_template_available():
+        raise HTTPException(status_code=404, detail="No hay plantilla PDF cargada. Súbela en el panel administrador.")
+
+    participants = store.list_participants(event_id)
+    if not participants:
+        raise HTTPException(status_code=404, detail="El evento no tiene participantes todavía.")
+
+    layout = load_layout()
+    items = []
+    skipped = []
+    for participant in participants:
+        try:
+            tickets = build_qr_tickets(event_id, participant)
+        except Exception as exc:
+            # Un registro con datos corruptos (ej. importado por error desde un
+            # archivo binario) no debe tumbar el documento completo de todos.
+            skipped.append(participant.get("name") or participant.get("id"))
+            continue
+        for ticket in tickets:
+            items.append(
+                {
+                    "participant_name": participant.get("name", ""),
+                    "qr_image_bytes": base64.b64decode(ticket["image"].split(",", 1)[1]),
+                }
+            )
+
+    if not items:
+        raise HTTPException(
+            status_code=404,
+            detail="No se pudo generar ninguna invitación (revisa que los participantes tengan datos válidos).",
+        )
+
+    try:
+        pdf_bytes = build_invitations_document(items, layout=layout)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    if skipped:
+        # No hay forma de "avisar" dentro de un PDF binario sin abrir el archivo;
+        # se deja constancia en logs del servidor para que el admin lo revise.
+        print(f"[invitations/document] Se omitieron {len(skipped)} participantes con datos inválidos: {skipped}")
+
+    filename = f"invitaciones_{event_id}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @app.post("/attendance/scan")

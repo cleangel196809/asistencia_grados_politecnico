@@ -142,6 +142,7 @@ function AdminPage({ user, onLogout }) {
   const [layoutPreviewImage, setLayoutPreviewImage] = useState(null);
   const [composedInvitation, setComposedInvitation] = useState(null);
   const [isLoadingComposedInvitation, setIsLoadingComposedInvitation] = useState(false);
+  const [isGeneratingInvitationsDocument, setIsGeneratingInvitationsDocument] = useState(false);
   const [editingUserId, setEditingUserId] = useState(null);
   const [editUserForm, setEditUserForm] = useState({ role: '', password: '' });
 
@@ -194,11 +195,20 @@ function AdminPage({ user, onLogout }) {
     return line.split(delimiter).map((item) => item.trim());
   };
 
+  const isMassInvitationHeaderLine = (line) => {
+    const lowercase = line.toLowerCase();
+    return lowercase.includes('documento') && (lowercase.includes('nombre') || lowercase.includes('apellidos'));
+  };
+
   const parseMassInvitationInput = (text) => {
-    const lines = text
+    const rawLines = text
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
+
+    // Si el usuario pega directo desde Excel/CSV con encabezado (sin pasar por
+    // "Importar CSV", que sí lo quita), la primera fila no debe crearse como invitado.
+    const lines = rawLines.length && isMassInvitationHeaderLine(rawLines[0]) ? rawLines.slice(1) : rawLines;
 
     const parsed = lines.map((line, index) => {
       const columns = splitMassLine(line);
@@ -464,6 +474,49 @@ function AdminPage({ user, onLogout }) {
     }
   };
 
+  const generateInvitationsDocument = async (mode = 'view') => {
+    if (!selectedEventId) {
+      setStatus('Seleccione un evento antes de generar el documento de invitaciones.');
+      return;
+    }
+    setIsGeneratingInvitationsDocument(true);
+    setStatus('Generando documento con todas las invitaciones... puede tardar unos segundos si hay muchos invitados.');
+    try {
+      const response = await api.get(`/events/${selectedEventId}/invitations/document`, { responseType: 'blob' });
+      const url = URL.createObjectURL(response.data);
+      const selectedEvent = events.find((item) => item.id === selectedEventId);
+      const safeName = (selectedEvent?.name || 'evento').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+
+      if (mode === 'download') {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `invitaciones_${safeName}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setStatus('Documento descargado con todas las invitaciones en PDF.');
+      } else {
+        window.open(url, '_blank', 'noopener');
+        setStatus('Documento generado. Se abrió en una pestaña nueva para revisarlo (también puedes guardarlo desde ahí).');
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (error) {
+      let detail = 'Verifica que haya una plantilla PDF cargada y participantes en el evento.';
+      if (error?.response?.data instanceof Blob) {
+        try {
+          const text = await error.response.data.text();
+          const parsed = JSON.parse(text);
+          detail = parsed.detail || detail;
+        } catch (parseError) {
+          // se usa el mensaje genérico
+        }
+      }
+      setStatus(`No fue posible generar el documento de invitaciones. ${detail}`);
+    } finally {
+      setIsGeneratingInvitationsDocument(false);
+    }
+  };
+
   const generateBulkQr = async () => {
     if (!selectedEventId) {
       setStatus('Seleccione un evento antes de generar QR masivo.');
@@ -495,6 +548,7 @@ function AdminPage({ user, onLogout }) {
     }
 
     setIsCreatingMassInvitations(true);
+    setStatus(`Creando invitaciones masivas... 0/${parsed.length}`);
     let created = 0;
     const skipped = [];
 
@@ -521,6 +575,9 @@ function AdminPage({ user, onLogout }) {
       } catch (error) {
         const detail = error?.response?.data?.detail;
         skipped.push({ line: index + 1, reason: detail || 'Error al crear invitación.' });
+      }
+      if ((index + 1) % 5 === 0 || index === parsed.length - 1) {
+        setStatus(`Creando invitaciones masivas... ${index + 1}/${parsed.length}`);
       }
     }
 
@@ -558,8 +615,29 @@ function AdminPage({ user, onLogout }) {
       event.target.value = '';
       return;
     }
+
+    const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv';
+    if (!isCsv) {
+      setStatus(
+        `Archivo inválido: "${file.name}" no es un .csv. Si tienes un Excel (.xlsx), impórtalo con el botón "Importar Excel de participantes" del paso 2, no aquí.`,
+      );
+      event.target.value = '';
+      return;
+    }
+
     const raw = await file.text();
     const normalized = raw.replace(/^\uFEFF/, '');
+
+    // Señal de que el archivo es binario (ej. un .xlsx renombrado a .csv) leído
+    // como texto: aparecen caracteres de reemplazo en vez del contenido real.
+    const replacementCharCount = (normalized.match(/\uFFFD/g) || []).length;
+    if (replacementCharCount > normalized.length * 0.01) {
+      setStatus(
+        `"${file.name}" no parece un CSV de texto válido (contiene datos binarios). Si es un Excel, usa "Importar Excel de participantes" en el paso 2 en vez de esta opción.`,
+      );
+      event.target.value = '';
+      return;
+    }
     const rows = normalized
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -1065,6 +1143,26 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
           <p>QR generados: {bulkQrPreview.participants.length} invitaciones.</p>
         ) : (
           <p>Genere los QR masivos para adjuntarlos en envíos masivos e individuales.</p>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: '1rem' }}>
+        <h3>Documento con todas las invitaciones</h3>
+        <p style={{ marginTop: '-0.25rem', color: '#64748b' }}>
+          Genera un PDF con una página por invitación (nombre + QR ya armados) de todo el evento, para revisar de un vistazo que todo quedó correcto antes de enviarlo.
+        </p>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => generateInvitationsDocument('view')} disabled={isGeneratingInvitationsDocument || !hasSelectedEventInAdmin || !invitationTemplate.exists}>
+            {isGeneratingInvitationsDocument ? 'Generando documento...' : 'Ver documento de invitaciones'}
+          </button>
+          <button type="button" onClick={() => generateInvitationsDocument('download')} disabled={isGeneratingInvitationsDocument || !hasSelectedEventInAdmin || !invitationTemplate.exists}>
+            {isGeneratingInvitationsDocument ? 'Generando documento...' : 'Descargar todas las invitaciones (PDF)'}
+          </button>
+        </div>
+        {!invitationTemplate.exists && (
+          <div className="badge" style={{ marginTop: '0.5rem', background: '#fff7ed', color: '#9a3412' }}>
+            Carga la plantilla PDF arriba antes de generar el documento.
+          </div>
         )}
       </div>
 
