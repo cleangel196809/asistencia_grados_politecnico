@@ -48,15 +48,15 @@ Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8000/health" | Select-
 
 ## Test Commands
 
-There is no unified test runner config at repo root. Use direct module/file execution for backend tests.
+There is no unified test runner config at repo root. Backend unit/integration tests live in `backend/tests/` (pytest-compatible; `test_auth.py` also runs under `unittest`).
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m unittest tests\test_auth.py
-.\.venv\Scripts\python.exe -m pytest tests\test_event_reporting_and_qr.py
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pytest tests/ --ignore=tests/check_login.py
 ```
 
-If pytest is not available in the active environment, install it in backend virtualenv before running pytest-based tests.
+`tests/check_login.py` is a manual smoke script (not a pytest test) that expects a live server on `localhost:8000` — exclude it from automated runs.
 
 ## Architecture and Boundaries
 

@@ -10,7 +10,7 @@ def test_bulk_qr_generation_returns_tickets_for_all_participants():
     event = client.get('/events').json()[0]
     participants = client.get(f"/events/{event['id']}/participants").json()
 
-    response = client.get(f"/events/{event['id']}/qr")
+    response = client.get(f"/events/{event['id']}/qr/bulk")
 
     assert response.status_code == 200
     payload = response.json()
@@ -40,6 +40,7 @@ def test_report_includes_pending_and_attended_participants():
     buffer = pd.ExcelFile(report_response.content)
     df = pd.read_excel(buffer)
     assert 'Estado asistencia' in df.columns
-    assert 'Tickets pendientes' in df.columns
+    assert 'Invitaciones pendientes' in df.columns
+    assert 'Fecha/Hora ingreso' in df.columns
     assert len(df) >= 1
     assert df['Estado asistencia'].isin(['Asistió', 'Pendiente']).all()
