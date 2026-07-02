@@ -1,0 +1,23 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #0f172a;
+  background: #f8fafc;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: linear-gradient(135deg, #eff6ff, #f8fafc); }
+a { color: inherit; text-decoration: none; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; border: none; border-radius: 10px; padding: 0.8rem 1rem; background: #2563eb; color: white; }
+input, select, textarea { width: 100%; padding: 0.8rem; border-radius: 10px; border: 1px solid #cbd5e1; margin-bottom: 0.7rem; }
+.app-shell { min-height: 100vh; }
+.topbar { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.2rem; background: #0f172a; color: white; }
+.nav-links { display: flex; gap: 1rem; }
+.page { padding: 1rem; max-width: 1100px; margin: 0 auto; }
+.card-grid { display: grid; gap: 1rem; grid-template-columns: 1fr 1fr; }
+.card { background: white; border-radius: 18px; padding: 1rem; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
+.stack { display: flex; flex-direction: column; gap: 0.5rem; }
+.list-item { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.7rem; border-radius: 10px; background: #f8fafc; }
+.badge { display: inline-block; padding: 0.35rem 0.8rem; border-radius: 999px; background: #dcfce7; color: #166534; margin-bottom: 1rem; }
+.scanner-frame { width: 100%; min-height: 260px; border-radius: 16px; background: #020617; margin-top: 1rem; }
+.upload-box { display: block; padding: 0.8rem; border: 1px dashed #94a3b8; border-radius: 10px; margin-top: 0.7rem; }
+@media (max-width: 760px) { .card-grid { grid-template-columns: 1fr; } .topbar { flex-direction: column; align-items: flex-start; gap: 0.5rem; } }

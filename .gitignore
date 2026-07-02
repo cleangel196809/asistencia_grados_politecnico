@@ -1,0 +1,10 @@
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+frontend/package-lock.json
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+
