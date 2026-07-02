@@ -8,6 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
+
+# Debe correr antes de importar app.database/app.security, que leen
+# variables de entorno (MONGO_URI, JWT_SECRET_KEY, EMAIL_*, etc.) al importarse.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 import pandas as pd
 import qrcode
 from pypdf import PdfReader
@@ -19,6 +25,12 @@ from pydantic import BaseModel, Field
 from app.auth import get_current_user, require_role
 from app.database import store
 from app.email_service import is_smtp_configured, send_bulk_invitation_emails, send_invitation_email
+from app.invitation_service import (
+    compose_invitation_data_uri,
+    is_template_available,
+    load_layout,
+    save_layout,
+)
 from app.security import create_access_token
 from app.whatsapp_trello_service import program_whatsapp_cards_for_event
 
@@ -459,6 +471,56 @@ def get_invitation_template_status(current_user: dict = Depends(get_current_user
     }
 
 
+class InvitationLayoutName(BaseModel):
+    x: Optional[float] = None
+    y: Optional[float] = None
+    font_size: Optional[int] = None
+    max_width: Optional[float] = None
+    color: Optional[str] = None
+
+
+class InvitationLayoutQr(BaseModel):
+    x: Optional[float] = None
+    y: Optional[float] = None
+    size: Optional[float] = None
+
+
+class InvitationLayoutUpdate(BaseModel):
+    name: Optional[InvitationLayoutName] = None
+    qr: Optional[InvitationLayoutQr] = None
+
+
+@app.get("/invitations/template/layout")
+def get_invitation_layout(current_user: dict = Depends(get_current_user)) -> Dict[str, Any]:
+    return load_layout()
+
+
+@app.put("/invitations/template/layout")
+def update_invitation_layout(
+    body: InvitationLayoutUpdate,
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> Dict[str, Any]:
+    return save_layout(body.model_dump(exclude_none=True))
+
+
+@app.get("/invitations/template/preview")
+def preview_invitation_layout(
+    name: str = "Nombre de ejemplo",
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> Dict[str, Any]:
+    if not is_template_available():
+        raise HTTPException(status_code=404, detail="No hay plantilla PDF cargada")
+    demo_qr = qrcode.make(json.dumps({"preview": True}))
+    buf = io.BytesIO()
+    demo_qr.save(buf, format="PNG")
+    demo_qr_data_uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    try:
+        image = compose_invitation_data_uri(participant_name=name, qr_image_data_uri=demo_qr_data_uri)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"image": image}
+
+
 @app.get("/invitations/template/download")
 def download_invitation_template() -> FileResponse:
     # Sin auth a propósito: el frontend abre esta URL con window.open()/enlace
@@ -606,6 +668,37 @@ def generate_qr(
         raise HTTPException(status_code=404, detail="Participant not found for the selected event")
 
     return {"participant": participant, "tickets": build_qr_tickets(event_id, participant)}
+
+
+@app.get("/events/{event_id}/invitation/{participant_id}")
+def generate_composed_invitation(
+    event_id: str,
+    participant_id: str,
+    current_user: dict = Depends(require_role("ADMIN", "LOGISTICO")),
+) -> Dict[str, Any]:
+    """Devuelve la invitación armada: plantilla + nombre + QR, un PNG por boleta."""
+
+    participant = store.get_participant(participant_id)
+    if not participant or participant.get("event_id") != event_id:
+        raise HTTPException(status_code=404, detail="Participant not found for the selected event")
+
+    if not is_template_available():
+        raise HTTPException(status_code=404, detail="No hay plantilla PDF cargada. Súbela en el panel administrador.")
+
+    layout = load_layout()
+    tickets = build_qr_tickets(event_id, participant)
+    invitations = [
+        {
+            "index": ticket["index"],
+            "image": compose_invitation_data_uri(
+                participant_name=participant.get("name", ""),
+                qr_image_data_uri=ticket["image"],
+                layout=layout,
+            ),
+        }
+        for ticket in tickets
+    ]
+    return {"participant": participant, "invitations": invitations}
 
 
 @app.post("/attendance/scan")

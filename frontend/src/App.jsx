@@ -133,6 +133,15 @@ function AdminPage({ user, onLogout }) {
   const [massInvitationResult, setMassInvitationResult] = useState(null);
   const [invitationTemplate, setInvitationTemplate] = useState({ exists: false, size_bytes: 0 });
   const [emailConfigured, setEmailConfigured] = useState(false);
+  const [layoutForm, setLayoutForm] = useState({
+    name: { x: 0.5, y: 0.385, font_size: 130, max_width: 0.78, color: '#26265f' },
+    qr: { x: 0.5, y: 0.665, size: 0.48 },
+  });
+  const [isSavingLayout, setIsSavingLayout] = useState(false);
+  const [isLoadingLayoutPreview, setIsLoadingLayoutPreview] = useState(false);
+  const [layoutPreviewImage, setLayoutPreviewImage] = useState(null);
+  const [composedInvitation, setComposedInvitation] = useState(null);
+  const [isLoadingComposedInvitation, setIsLoadingComposedInvitation] = useState(false);
   const [editingUserId, setEditingUserId] = useState(null);
   const [editUserForm, setEditUserForm] = useState({ role: '', password: '' });
 
@@ -281,6 +290,20 @@ function AdminPage({ user, onLogout }) {
   }, []);
 
   useEffect(() => {
+    const loadInvitationLayout = async () => {
+      try {
+        const { data } = await api.get('/invitations/template/layout');
+        if (data?.name && data?.qr) {
+          setLayoutForm(data);
+        }
+      } catch (error) {
+        // se mantienen los valores por defecto
+      }
+    };
+    loadInvitationLayout();
+  }, []);
+
+  useEffect(() => {
     if (!selectedEventId) return;
     loadParticipants(selectedEventId);
   }, [selectedEventId]);
@@ -391,6 +414,54 @@ function AdminPage({ user, onLogout }) {
     const { data } = await api.get(`/events/${selectedEventId}/qr/${participant.id}`);
     setQrPreview(data);
     setStatus('QR generado para la invitación.');
+  };
+
+  const updateLayoutField = (section, field, value) => {
+    setLayoutForm((prev) => ({ ...prev, [section]: { ...prev[section], [field]: value } }));
+  };
+
+  const saveInvitationLayout = async () => {
+    setIsSavingLayout(true);
+    try {
+      const { data } = await api.put('/invitations/template/layout', layoutForm);
+      setLayoutForm(data);
+      setStatus('Posición del nombre y el QR guardada.');
+    } catch (error) {
+      setStatus(`No fue posible guardar la posición. ${getErrorDetail(error, 'Intenta nuevamente.')}`);
+    } finally {
+      setIsSavingLayout(false);
+    }
+  };
+
+  const previewInvitationLayout = async () => {
+    setIsLoadingLayoutPreview(true);
+    try {
+      const { data } = await api.get('/invitations/template/preview', {
+        params: { name: 'Nombre De Ejemplo Apellido' },
+      });
+      setLayoutPreviewImage(data.image);
+    } catch (error) {
+      setStatus(`No fue posible generar la vista previa. ${getErrorDetail(error, 'Verifica que haya una plantilla PDF cargada.')}`);
+    } finally {
+      setIsLoadingLayoutPreview(false);
+    }
+  };
+
+  const viewComposedInvitation = async (participant) => {
+    if (!selectedEventId) {
+      setStatus('Seleccione un evento antes de armar la invitación.');
+      return;
+    }
+    setIsLoadingComposedInvitation(true);
+    try {
+      const { data } = await api.get(`/events/${selectedEventId}/invitation/${participant.id}`);
+      setComposedInvitation(data);
+      setStatus('Invitación armada correctamente.');
+    } catch (error) {
+      setStatus(`No fue posible armar la invitación. ${getErrorDetail(error, 'Verifica que haya una plantilla PDF cargada.')}`);
+    } finally {
+      setIsLoadingComposedInvitation(false);
+    }
   };
 
   const generateBulkQr = async () => {
@@ -814,6 +885,9 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
             <span>QR usados: {participant.used_qr_count ?? 0} · pendientes: {participant.pending_qr_count ?? participant.ticket_count ?? 1}</span>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
               <button onClick={() => generateQr(participant)}>Generar QR</button>
+              <button onClick={() => viewComposedInvitation(participant)} disabled={isLoadingComposedInvitation || !invitationTemplate.exists}>
+                Ver invitación armada
+              </button>
               <button onClick={() => sendParticipantEmailReal(participant)}>Enviar correo</button>
               <button onClick={() => sendInvitation(participant, 'whatsapp')}>Enviar WhatsApp</button>
               <button onClick={() => removeParticipant(participant.id)}>Eliminar</button>
@@ -839,6 +913,25 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
               <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{qrPreview.payload}</pre>
             </>
           )}
+        </div>
+      )}
+
+      {composedInvitation && (
+        <div className="card" style={{ marginTop: '1rem' }}>
+          <h3>Invitación armada: {composedInvitation.participant?.name}</h3>
+          <p style={{ marginTop: '-0.25rem', color: '#64748b' }}>Nombre y QR ya combinados sobre la plantilla institucional. Clic derecho → Guardar imagen para descargarla.</p>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            {(composedInvitation.invitations || []).map((invitation) => (
+              <div key={invitation.index}>
+                <strong>Boleta {invitation.index}</strong>
+                <img
+                  src={invitation.image}
+                  alt={`Invitación ${invitation.index}`}
+                  style={{ maxWidth: '260px', display: 'block', marginTop: '0.5rem', border: '1px solid #e2e8f0', borderRadius: '8px' }}
+                />
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </>
@@ -911,6 +1004,56 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
         <button type="button" onClick={openInvitationTemplatePdf} disabled={!invitationTemplate.exists}>
           Ver plantilla PDF cargada
         </button>
+      </div>
+
+      <div className="card" style={{ marginTop: '1rem' }}>
+        <h3>Posición del nombre y el QR sobre la plantilla</h3>
+        <p style={{ marginTop: '-0.25rem', color: '#64748b' }}>
+          Define en qué parte de la plantilla se dibuja el nombre del invitado y en qué parte se pega su código QR.
+          Los valores de posición y tamaño son porcentajes del ancho/alto de la imagen (0 = borde izquierdo/superior, 1 = borde derecho/inferior).
+        </p>
+        <div className="card-grid">
+          <div>
+            <h4>Nombre (primer cuadro)</h4>
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Posición horizontal (0-1)</span>
+            <input type="number" step="0.01" min="0" max="1" value={layoutForm.name.x} onChange={(e) => updateLayoutField('name', 'x', Number(e.target.value))} />
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Posición vertical (0-1)</span>
+            <input type="number" step="0.01" min="0" max="1" value={layoutForm.name.y} onChange={(e) => updateLayoutField('name', 'y', Number(e.target.value))} />
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Tamaño de letra (px, se reduce solo si el nombre es muy largo)</span>
+            <input type="number" min="10" value={layoutForm.name.font_size} onChange={(e) => updateLayoutField('name', 'font_size', Number(e.target.value))} />
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Ancho máximo del texto (0-1)</span>
+            <input type="number" step="0.01" min="0.1" max="1" value={layoutForm.name.max_width} onChange={(e) => updateLayoutField('name', 'max_width', Number(e.target.value))} />
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Color del texto</span>
+            <input type="color" value={layoutForm.name.color} onChange={(e) => updateLayoutField('name', 'color', e.target.value)} />
+          </div>
+          <div>
+            <h4>Código QR (cuadro final)</h4>
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Posición horizontal (0-1)</span>
+            <input type="number" step="0.01" min="0" max="1" value={layoutForm.qr.x} onChange={(e) => updateLayoutField('qr', 'x', Number(e.target.value))} />
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Posición vertical (0-1)</span>
+            <input type="number" step="0.01" min="0" max="1" value={layoutForm.qr.y} onChange={(e) => updateLayoutField('qr', 'y', Number(e.target.value))} />
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Tamaño del QR (0-1 del ancho de la plantilla)</span>
+            <input type="number" step="0.01" min="0.05" max="1" value={layoutForm.qr.size} onChange={(e) => updateLayoutField('qr', 'size', Number(e.target.value))} />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+          <button type="button" onClick={saveInvitationLayout} disabled={isSavingLayout}>
+            {isSavingLayout ? 'Guardando...' : 'Guardar posición'}
+          </button>
+          <button type="button" onClick={previewInvitationLayout} disabled={isLoadingLayoutPreview || !invitationTemplate.exists}>
+            {isLoadingLayoutPreview ? 'Generando vista previa...' : 'Vista previa con nombre de ejemplo'}
+          </button>
+        </div>
+        {!invitationTemplate.exists && (
+          <div className="badge" style={{ marginTop: '0.5rem', background: '#fff7ed', color: '#9a3412' }}>
+            Carga la plantilla PDF arriba antes de ajustar la posición.
+          </div>
+        )}
+        {layoutPreviewImage && (
+          <div style={{ marginTop: '1rem' }}>
+            <img src={layoutPreviewImage} alt="Vista previa de la invitación" style={{ maxWidth: '280px', border: '1px solid #e2e8f0', borderRadius: '8px' }} />
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ marginTop: '1rem' }}>

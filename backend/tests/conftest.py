@@ -1,3 +1,10 @@
+import os
+
+# Debe fijarse antes de importar app.main (que importa app.database), para que
+# las pruebas usen una base en memoria limpia y no lean/escriban el snapshot
+# real de desarrollo en backend/.data/mock_snapshot.json.
+os.environ.setdefault("DISABLE_MOCK_SNAPSHOT", "1")
+
 import pytest
 from fastapi.testclient import TestClient
 

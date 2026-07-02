@@ -1,6 +1,7 @@
 import os
 import secrets
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from jose import JWTError, jwt
@@ -11,18 +12,39 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 ALGORITHM = "HS256"
 DEFAULT_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 
-# Si no se define JWT_SECRET_KEY, se genera una clave aleatoria al iniciar el
-# proceso. Eso mantiene el arranque sin configuración (como el resto de este
-# backend), a costa de invalidar tokens existentes en cada reinicio del
-# servidor. Para producción, define JWT_SECRET_KEY en el entorno.
-_env_secret = os.getenv("JWT_SECRET_KEY")
-if not _env_secret:
-    print(
-        "[security] JWT_SECRET_KEY no definida: usando una clave generada para "
-        "este proceso. Los tokens dejarán de ser válidos si el servidor se reinicia. "
-        "Define JWT_SECRET_KEY en producción (ver backend/.env.example)."
-    )
-_SECRET_KEY = _env_secret or secrets.token_urlsafe(32)
+_SECRET_FILE = Path(__file__).resolve().parents[1] / ".data" / "jwt_secret.key"
+
+
+def _load_or_create_secret() -> str:
+    env_secret = os.getenv("JWT_SECRET_KEY")
+    if env_secret:
+        return env_secret
+
+    try:
+        if _SECRET_FILE.exists():
+            saved = _SECRET_FILE.read_text(encoding="utf-8").strip()
+            if saved:
+                return saved
+        _SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        generated = secrets.token_urlsafe(32)
+        _SECRET_FILE.write_text(generated, encoding="utf-8")
+        print(
+            "[security] JWT_SECRET_KEY no definida: se generó y guardó una clave en "
+            f"{_SECRET_FILE}. Las sesiones sobrevivirán a reinicios del backend. "
+            "Define JWT_SECRET_KEY en el entorno para producción."
+        )
+        return generated
+    except OSError:
+        # Sin acceso de escritura al disco: la clave solo vive en memoria y las
+        # sesiones se invalidan en cada reinicio (no debería pasar en local/dev normal).
+        print(
+            "[security] No se pudo guardar JWT_SECRET_KEY en disco: usando una clave "
+            "solo en memoria para este proceso."
+        )
+        return secrets.token_urlsafe(32)
+
+
+_SECRET_KEY = _load_or_create_secret()
 
 
 def _secret_key() -> str:
