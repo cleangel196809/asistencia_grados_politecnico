@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: asistencia-grados-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Configura estos manualmente en el dashboard de Render (Environment):
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        value: attendance_system
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "480"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: EMAIL_SMTP_HOST
+        value: smtp.office365.com
+      - key: EMAIL_SMTP_PORT
+        value: "587"
+      - key: EMAIL_SMTP_USER
+        sync: false
+      - key: EMAIL_SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: "Eventos Politécnico Internacional"
+      - key: EMAIL_USE_TLS
+        value: "true"
+      - key: TRELLO_API_KEY
+        sync: false
+      - key: TRELLO_API_TOKEN
+        sync: false
+      - key: TRELLO_BOARD_ID
+        sync: false
+      - key: TRELLO_LIST_ID_WHATSAPP_PENDING
+        sync: false

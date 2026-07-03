@@ -2,7 +2,6 @@ import base64
 import io
 import json
 import os
-import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +15,6 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 import pandas as pd
 import qrcode
-from pypdf import PdfReader
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -377,72 +375,6 @@ async def import_participants(
     return {"imported": len(imported)}
 
 
-def parse_pdf_invitation_lines(raw_text: str) -> List[str]:
-    delimiter_pattern = re.compile(r"[;,|\t]")
-    email_pattern = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-    document_pattern = re.compile(r"\b\d{5,}\b")
-    phone_pattern = re.compile(r"\b\d{7,15}\b")
-    ignored_words = {
-        "nombre",
-        "nombres",
-        "documento",
-        "cedula",
-        "email",
-        "correo",
-        "telefono",
-        "tel",
-        "programa",
-        "sede",
-        "cohorte",
-        "promedio",
-        "cantidad",
-        "qr",
-    }
-
-    normalized_rows: List[str] = []
-    for line in raw_text.splitlines():
-        compact = " ".join(line.strip().split())
-        if len(compact) < 6:
-            continue
-        lowercase = compact.lower()
-        if any(keyword in lowercase for keyword in ignored_words) and not document_pattern.search(compact):
-            continue
-
-        if delimiter_pattern.search(compact):
-            parts = re.split(r"[;,|\t]", compact)
-            cleaned = [part.strip() for part in parts]
-            if len(cleaned) >= 2 and cleaned[0] and document_pattern.search(cleaned[1]):
-                row = cleaned[:9]
-                while len(row) < 9:
-                    row.append("1" if len(row) == 8 else "")
-                if not row[8]:
-                    row[8] = "1"
-                normalized_rows.append(";".join(row))
-            continue
-
-        document_match = document_pattern.search(compact)
-        if not document_match:
-            continue
-
-        document_value = document_match.group(0)
-        name_value = compact[: document_match.start()].strip(" -:|,")
-        if not name_value:
-            continue
-
-        email_match = email_pattern.search(compact)
-        email_value = email_match.group(0) if email_match else ""
-
-        tail = compact[document_match.end() :]
-        phone_match = phone_pattern.search(tail)
-        phone_value = phone_match.group(0) if phone_match else ""
-
-        row = [name_value, document_value, email_value, phone_value, "", "", "", "", "1"]
-        normalized_rows.append(";".join(row))
-
-    unique_rows = list(dict.fromkeys(normalized_rows))
-    return unique_rows
-
-
 @app.post("/invitations/template")
 async def upload_invitation_template(
     file: UploadFile = File(...),
@@ -537,41 +469,6 @@ def download_invitation_template() -> FileResponse:
         media_type="application/pdf",
         filename="plantilla_invitaciones.pdf",
     )
-
-
-@app.post("/participants/import-pdf-preview")
-async def import_participants_pdf_preview(
-    file: UploadFile = File(...),
-    current_user: dict = Depends(require_role("ADMIN")),
-) -> Dict[str, Any]:
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
-
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="PDF file is empty")
-
-    try:
-        reader = PdfReader(io.BytesIO(content))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid PDF file: {exc}")
-
-    extracted_chunks: List[str] = []
-    for page in reader.pages:
-        extracted_chunks.append(page.extract_text() or "")
-
-    text = "\n".join(extracted_chunks).strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="No readable text was found in the PDF")
-
-    rows = parse_pdf_invitation_lines(text)
-    if not rows:
-        raise HTTPException(
-            status_code=400,
-            detail="No invitation rows were detected. Verify that the PDF has selectable text and columns with Nombre y Documento.",
-        )
-
-    return {"rows": rows, "detected": len(rows)}
 
 
 @app.post("/login")
@@ -832,6 +729,32 @@ async def scan_attendance(
 @app.get("/attendances/{event_id}")
 def list_attendances(event_id: str, current_user: dict = Depends(get_current_user)) -> List[Dict[str, Any]]:
     return store.list_attendances(event_id)
+
+
+@app.get("/events/{event_id}/summary")
+def event_summary(event_id: str, current_user: dict = Depends(get_current_user)) -> Dict[str, Any]:
+    """Actividad agregada del evento: usada para la barra de progreso en admin/logistico."""
+
+    event = store.get_event(event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    participants = store.list_participants(event_id)
+    attendances = store.list_attendances(event_id)
+    capacity = int(event.get("capacity") or 0)
+    total_invitations = sum(max(1, p.get("ticket_count", 1)) for p in participants)
+    used_invitations = len(attendances)
+
+    return {
+        "event_id": event_id,
+        "participants_count": len(participants),
+        "capacity": capacity,
+        "total_invitations": total_invitations,
+        "used_invitations": used_invitations,
+        "pending_invitations": max(0, total_invitations - used_invitations),
+        "checked_in": used_invitations,
+        "capacity_used_pct": round((used_invitations / capacity) * 100) if capacity else 0,
+    }
 
 
 @app.get("/events/{event_id}/report")

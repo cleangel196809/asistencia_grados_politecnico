@@ -62,6 +62,27 @@ function clearAuth() {
   localStorage.removeItem(AUTH_STORAGE_KEY);
 }
 
+function ProgressBar({ value, max, label, color }) {
+  const safeMax = Number(max) || 0;
+  const pct = safeMax > 0 ? Math.min(100, Math.round((Number(value) / safeMax) * 100)) : 0;
+  return (
+    <div style={{ marginTop: '0.4rem' }}>
+      {label && <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.25rem' }}>{label}</div>}
+      <div style={{ background: '#e2e8f0', borderRadius: '999px', height: '10px', overflow: 'hidden' }}>
+        <div
+          style={{
+            width: `${pct}%`,
+            background: color || '#2563eb',
+            height: '100%',
+            transition: 'width 0.2s ease',
+          }}
+        />
+      </div>
+      <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.2rem' }}>{value}/{safeMax} ({pct}%)</div>
+    </div>
+  );
+}
+
 const PARTICIPANTS_PREFIX = 'participants:';
 const QUEUE_KEY = 'attendance-queue';
 const ROLE_ADMIN = 'ADMIN';
@@ -143,6 +164,10 @@ function AdminPage({ user, onLogout }) {
   const [composedInvitation, setComposedInvitation] = useState(null);
   const [isLoadingComposedInvitation, setIsLoadingComposedInvitation] = useState(false);
   const [isGeneratingInvitationsDocument, setIsGeneratingInvitationsDocument] = useState(false);
+  const [isSendingBulkEmail, setIsSendingBulkEmail] = useState(false);
+  const [emailSendProgress, setEmailSendProgress] = useState(null);
+  const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
+  const [eventSummaries, setEventSummaries] = useState({});
   const [editingUserId, setEditingUserId] = useState(null);
   const [editUserForm, setEditUserForm] = useState({ role: '', password: '' });
 
@@ -278,6 +303,30 @@ function AdminPage({ user, onLogout }) {
   useEffect(() => {
     loadEvents();
   }, []);
+
+  useEffect(() => {
+    if (!events.length) return;
+    let cancelled = false;
+    const loadEventSummaries = async () => {
+      const entries = await Promise.all(
+        events.map(async (event) => {
+          try {
+            const { data } = await api.get(`/events/${event.id}/summary`);
+            return [event.id, data];
+          } catch (error) {
+            return [event.id, null];
+          }
+        }),
+      );
+      if (!cancelled) {
+        setEventSummaries(Object.fromEntries(entries));
+      }
+    };
+    loadEventSummaries();
+    return () => {
+      cancelled = true;
+    };
+  }, [events]);
 
   useEffect(() => {
     loadUsers();
@@ -607,96 +656,6 @@ function AdminPage({ user, onLogout }) {
     URL.revokeObjectURL(url);
   };
 
-  const importMassInvitationCsv = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!hasSelectedEventInAdmin) {
-      setStatus('Selecciona un evento antes de importar CSV masivo.');
-      event.target.value = '';
-      return;
-    }
-
-    const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv';
-    if (!isCsv) {
-      setStatus(
-        `Archivo inválido: "${file.name}" no es un .csv. Si tienes un Excel (.xlsx), impórtalo con el botón "Importar Excel de participantes" del paso 2, no aquí.`,
-      );
-      event.target.value = '';
-      return;
-    }
-
-    const raw = await file.text();
-    const normalized = raw.replace(/^\uFEFF/, '');
-
-    // Señal de que el archivo es binario (ej. un .xlsx renombrado a .csv) leído
-    // como texto: aparecen caracteres de reemplazo en vez del contenido real.
-    const replacementCharCount = (normalized.match(/\uFFFD/g) || []).length;
-    if (replacementCharCount > normalized.length * 0.01) {
-      setStatus(
-        `"${file.name}" no parece un CSV de texto válido (contiene datos binarios). Si es un Excel, usa "Importar Excel de participantes" en el paso 2 en vez de esta opción.`,
-      );
-      event.target.value = '';
-      return;
-    }
-    const rows = normalized
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    if (!rows.length) {
-      setStatus('El CSV está vacío.');
-      event.target.value = '';
-      return;
-    }
-
-    const maybeHeader = rows[0].toLowerCase();
-    const hasHeader = maybeHeader.includes('nombre') && maybeHeader.includes('documento');
-    const bodyRows = hasHeader ? rows.slice(1) : rows;
-    setMassInvitationText(bodyRows.join('\n'));
-    setMassInvitationResult(null);
-    setStatus(`CSV cargado. Filas detectadas: ${bodyRows.length}.`);
-    event.target.value = '';
-  };
-
-  const importMassInvitationPdf = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!hasSelectedEventInAdmin) {
-      setStatus('Selecciona un evento antes de importar PDF masivo.');
-      event.target.value = '';
-      return;
-    }
-
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-    if (!isPdf) {
-      setStatus('Archivo inválido. Selecciona un PDF para importación masiva.');
-      event.target.value = '';
-      return;
-    }
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const { data } = await api.post('/participants/import-pdf-preview', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const rows = Array.isArray(data?.rows) ? data.rows : [];
-      if (!rows.length) {
-        setStatus('No se detectaron filas válidas en el PDF.');
-      } else {
-        setMassInvitationText(rows.join('\n'));
-        setMassInvitationResult(null);
-        setStatus(`PDF cargado. Filas detectadas: ${rows.length}.`);
-      }
-    } catch (error) {
-      const detail = getErrorDetail(error, 'No fue posible leer el PDF.');
-      const hint = buildUploadTroubleshootingHint(error);
-      setStatus(`No fue posible importar el PDF. ${detail} ${hint}`);
-    } finally {
-      event.target.value = '';
-    }
-  };
-
   const uploadInvitationTemplatePdf = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -764,12 +723,14 @@ function AdminPage({ user, onLogout }) {
 
   // WhatsApp masivo -> Trello (1 card por invitado)
   const sendAllWhatsApp = async () => {
+    if (isSendingWhatsApp) return; // evita doble envío por doble clic mientras está en curso
     const selectedEvent = events.find((item) => item.id === selectedEventId);
     if (!selectedEventId) {
       setStatus('Seleccione un evento antes del envío masivo.');
       return;
     }
 
+    setIsSendingWhatsApp(true);
     try {
       const fromNote = adminSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${adminSendSettings.whatsappFrom}` : '';
       const whatsappText = `Hola, te invitamos al evento ${selectedEvent?.name || ''} en ${selectedEvent?.location || ''}. ${fromNote}`.trim();
@@ -784,6 +745,8 @@ function AdminPage({ user, onLogout }) {
       setStatus(`Trello: tarjetas creadas ${created}. Errores ${errors}.`);
     } catch (error) {
       setStatus(`No fue posible programar envíos WhatsApp en Trello. ${getErrorDetail(error, 'Intenta nuevamente.')}`);
+    } finally {
+      setIsSendingWhatsApp(false);
     }
   };
 
@@ -841,27 +804,52 @@ function AdminPage({ user, onLogout }) {
   };
 
   const sendAllEmailReal = async () => {
+    if (isSendingBulkEmail) return; // evita doble envío por doble clic mientras está en curso
     if (!selectedEventId) {
       setStatus('Seleccione un evento antes del envío masivo.');
       return;
     }
-    const selectedEvent = events.find((item) => item.id === selectedEventId);
-    try {
-      const { data } = await api.post('/invitations/email/program', {
-        event_id: selectedEventId,
-        subject: `Invitación a ${selectedEvent?.name || 'evento'}`,
-        body_text: '',
-      });
-      if (data?.configured) {
-        setStatus(`Correos enviados por SMTP: ${data.sent}. Errores: ${data.errors}.`);
-        return;
-      }
+
+    if (!emailConfigured) {
       setStatus('SMTP no configurado en el servidor. Se abrirá el borrador de correo masivo como respaldo.');
       await sendAllEmail();
-    } catch (error) {
-      setStatus(`No fue posible enviar correos por SMTP. ${getErrorDetail(error, 'Se intentará el borrador de respaldo.')}`);
-      await sendAllEmail();
+      return;
     }
+
+    const targets = participants.filter((participant) => participant.email);
+    if (!targets.length) {
+      setStatus('Ningún participante del evento tiene correo registrado.');
+      return;
+    }
+
+    const selectedEvent = events.find((item) => item.id === selectedEventId);
+    setIsSendingBulkEmail(true);
+    setEmailSendProgress({ sent: 0, total: targets.length, errors: 0 });
+    let sentCount = 0;
+    let errorCount = 0;
+
+    for (let index = 0; index < targets.length; index += 1) {
+      const participant = targets[index];
+      try {
+        const { data } = await api.post('/invitations/email/individual', {
+          event_id: selectedEventId,
+          participant_id: participant.id,
+          subject: `Invitación a ${selectedEvent?.name || 'evento'}`,
+          body_text: '',
+        });
+        if (data?.sent) {
+          sentCount += 1;
+        } else {
+          errorCount += 1;
+        }
+      } catch (error) {
+        errorCount += 1;
+      }
+      setEmailSendProgress({ sent: index + 1, total: targets.length, errors: errorCount });
+    }
+
+    setIsSendingBulkEmail(false);
+    setStatus(`Envío de correos terminado: ${sentCount} enviados, ${errorCount} con error, de ${targets.length} participantes con correo registrado.`);
   };
 
   const selectedEventInAdmin = events.find((item) => item.id === selectedEventId);
@@ -912,17 +900,28 @@ function AdminPage({ user, onLogout }) {
       </div>
 
       <div className="stack">
-        {events.map((event) => (
-          <div key={event.id} className="list-item">
-            <strong>{event.name}</strong>
-            <span>{event.date} · {event.location}</span>
-            <span>{event.schedule ? `Horario: ${event.schedule}` : 'Horario no asignado'}</span>
-            <span>Modo: {event.mode} · Aforo: {event.capacity} · Invitaciones por invitado: {event.tickets_per_participant || 1}</span>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <button onClick={() => deleteEvent(event.id)}>Eliminar evento</button>
+        {events.map((event) => {
+          const summary = eventSummaries[event.id];
+          return (
+            <div key={event.id} className="list-item">
+              <strong>{event.name}</strong>
+              <span>{event.date} · {event.location}</span>
+              <span>{event.schedule ? `Horario: ${event.schedule}` : 'Horario no asignado'}</span>
+              <span>Modo: {event.mode} · Aforo: {event.capacity} · Invitaciones por invitado: {event.tickets_per_participant || 1}</span>
+              {summary && (
+                <ProgressBar
+                  value={summary.used_invitations}
+                  max={summary.total_invitations}
+                  label={`Actividad del evento: ${summary.used_invitations} de ${summary.total_invitations} invitaciones usadas · ${summary.participants_count} invitados`}
+                  color="#16a34a"
+                />
+              )}
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button onClick={() => deleteEvent(event.id)}>Eliminar evento</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </>
   );
@@ -1017,18 +1016,14 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
 
   const step3 = (
     <>
+      <div className="badge" style={{ background: '#eff6ff', color: '#1d4ed8', marginBottom: '0.75rem' }}>
+        Para cargar un archivo con muchos participantes, usa el Excel del paso 2. Este paso es solo para pegar manualmente
+        unas pocas filas de texto (por ejemplo, invitados agregados de último momento).
+      </div>
       <p>Pegue una fila por invitado con este orden: Nombre;Documento;Email;Teléfono;Programa;Sede;Cohorte;Promedio;CantidadQR</p>
       <button type="button" onClick={downloadMassTemplateCsv}>
-        Descargar plantilla CSV
+        Descargar plantilla de ejemplo (formato de referencia)
       </button>
-      <label className="upload-box" style={{ marginTop: '0.75rem' }}>
-        <input type="file" accept=".csv,text/csv" onChange={importMassInvitationCsv} disabled={!hasSelectedEventInAdmin} />
-        Importar CSV de invitaciones masivas
-      </label>
-      <label className="upload-box" style={{ marginTop: '0.75rem' }}>
-        <input type="file" accept="application/pdf,.pdf" onChange={importMassInvitationPdf} disabled={!hasSelectedEventInAdmin} />
-        Importar PDF de invitaciones masivas
-      </label>
       <textarea
         value={massInvitationText}
         onChange={(e) => setMassInvitationText(e.target.value)}
@@ -1174,9 +1169,20 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
           Envío de correo: {emailConfigured ? 'SMTP configurado en el servidor' : 'SMTP no configurado — se usará borrador de correo (mailto) como respaldo'}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
-          <button type="button" onClick={sendAllWhatsApp} disabled={!hasSelectedEventInAdmin}>Programar WhatsApp masivo en Trello</button>
-          <button type="button" onClick={sendAllEmailReal} disabled={!hasSelectedEventInAdmin}>Enviar email masivo</button>
+          <button type="button" onClick={sendAllWhatsApp} disabled={!hasSelectedEventInAdmin || isSendingWhatsApp}>
+            {isSendingWhatsApp ? 'Programando en Trello...' : 'Programar WhatsApp masivo en Trello'}
+          </button>
+          <button type="button" onClick={sendAllEmailReal} disabled={!hasSelectedEventInAdmin || isSendingBulkEmail}>
+            {isSendingBulkEmail ? `Enviando correos... ${emailSendProgress?.sent ?? 0}/${emailSendProgress?.total ?? 0}` : 'Enviar email masivo'}
+          </button>
         </div>
+        {isSendingBulkEmail && emailSendProgress && (
+          <ProgressBar
+            value={emailSendProgress.sent}
+            max={emailSendProgress.total}
+            label={`Progreso de envío (${emailSendProgress.errors} con error hasta ahora)`}
+          />
+        )}
       </div>
     </>
   );
@@ -1410,6 +1416,7 @@ function LogisticsPage({ user, onLogout }) {
             <p>Aforo disponible: {availableCapacity}</p>
             <p>Capacidad total: {selectedEvent.capacity}</p>
             <p>Total de invitaciones usadas: {attendances.length}</p>
+            <ProgressBar value={checkedInCount} max={Number(selectedEvent.capacity) || 0} label="Ocupación del aforo" color="#2563eb" />
           </div>
         )}
 
@@ -1420,6 +1427,7 @@ function LogisticsPage({ user, onLogout }) {
             <p>Invitaciones emitidas (total QR): {invitationSummary.total}</p>
             <p>Invitaciones utilizadas: {invitationSummary.used}</p>
             <p>Invitaciones pendientes: {invitationSummary.pending}</p>
+            <ProgressBar value={invitationSummary.used} max={invitationSummary.total} label="Actividad del evento (invitaciones usadas)" color="#16a34a" />
           </div>
         )}
 
