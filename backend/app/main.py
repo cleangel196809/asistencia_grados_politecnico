@@ -68,6 +68,29 @@ class EmailIndividualRequest(BaseModel):
     body_text: str = ""
 
 
+class WhatsAppIndividualRequest(BaseModel):
+    event_id: str
+    participant_id: str
+    whatsapp_text: str = ""
+
+
+def _build_whatsapp_program_inputs(event_id: str, participants: List[Dict[str, Any]], whatsapp_text: str):
+    """Arma los payloads QR y las imagenes de invitacion ya compuestas para Trello."""
+    layout = load_layout() if is_template_available() else None
+    qr_payloads_by_participant: Dict[str, List[str]] = {}
+    invitation_images_by_participant: Dict[str, List[str]] = {}
+    whatsapp_text_by_participant: Dict[str, str] = {}
+
+    for p in participants:
+        pid = str(p.get("id"))
+        attachments = build_invitation_attachments(event_id, p, layout=layout)
+        qr_payloads_by_participant[pid] = [t.get("payload") for t in attachments if t.get("payload")]
+        invitation_images_by_participant[pid] = [t.get("image") for t in attachments if t.get("image")]
+        whatsapp_text_by_participant[pid] = whatsapp_text
+
+    return qr_payloads_by_participant, invitation_images_by_participant, whatsapp_text_by_participant
+
+
 @app.post("/invitations/whatsapp/trello/program")
 def program_whatsapp_trello(
     event_id: str,
@@ -75,7 +98,7 @@ def program_whatsapp_trello(
     participant_ids: Optional[List[str]] = None,
     current_user: dict = Depends(require_role("ADMIN")),
 ):
-    """Programa envío WhatsApp masivo creando una Card por invitado en Trello."""
+    """Programa envío WhatsApp masivo creando una Card por invitado en Trello, con la invitación armada adjunta."""
 
     event = store.get_event(event_id)
     if not event:
@@ -86,22 +109,56 @@ def program_whatsapp_trello(
         participant_ids_set = set(participant_ids)
         participants = [p for p in participants if p.get("id") in participant_ids_set]
 
-    # QR payloads por participante (usa ticket_count de cada invitado)
-    qr_payloads_by_participant: Dict[str, List[str]] = {}
-    for p in participants:
-        tickets = build_qr_tickets(event_id, p)
-        qr_payloads_by_participant[str(p.get("id"))] = [t.get("payload") for t in tickets if t.get("payload")]
-
-    whatsapp_text_by_participant: Dict[str, str] = {}
-    for p in participants:
-        whatsapp_text_by_participant[str(p.get("id"))] = whatsapp_text
-
-    result = program_whatsapp_cards_for_event(
-        event=event,
-        participants=participants,
-        whatsapp_text_by_participant=whatsapp_text_by_participant,
-        qr_payloads_by_participant=qr_payloads_by_participant,
+    qr_payloads_by_participant, invitation_images_by_participant, whatsapp_text_by_participant = (
+        _build_whatsapp_program_inputs(event_id, participants, whatsapp_text)
     )
+
+    try:
+        result = program_whatsapp_cards_for_event(
+            event=event,
+            participants=participants,
+            whatsapp_text_by_participant=whatsapp_text_by_participant,
+            qr_payloads_by_participant=qr_payloads_by_participant,
+            invitation_images_by_participant=invitation_images_by_participant,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    for item in result.get("created_items", []):
+        store.increment_participant_send_count(item["participant_id"], "whatsapp")
+    return result
+
+
+@app.post("/invitations/whatsapp/trello/individual")
+def program_whatsapp_trello_individual(
+    body: WhatsAppIndividualRequest,
+    current_user: dict = Depends(require_role("ADMIN", "LOGISTICO")),
+) -> Dict[str, Any]:
+    """Crea una sola Card de WhatsApp en Trello (con la invitación adjunta) para un invitado."""
+
+    event = store.get_event(body.event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    participant = store.get_participant(body.participant_id)
+    if not participant or participant.get("event_id") != body.event_id:
+        raise HTTPException(status_code=404, detail="Participant not found for the selected event")
+
+    qr_payloads_by_participant, invitation_images_by_participant, whatsapp_text_by_participant = (
+        _build_whatsapp_program_inputs(body.event_id, [participant], body.whatsapp_text)
+    )
+
+    try:
+        result = program_whatsapp_cards_for_event(
+            event=event,
+            participants=[participant],
+            whatsapp_text_by_participant=whatsapp_text_by_participant,
+            qr_payloads_by_participant=qr_payloads_by_participant,
+            invitation_images_by_participant=invitation_images_by_participant,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    for item in result.get("created_items", []):
+        store.increment_participant_send_count(item["participant_id"], "whatsapp")
     return result
 
 
@@ -148,6 +205,9 @@ def program_email_bulk(body: EmailProgramRequest, current_user: dict = Depends(r
         )
 
     result = send_bulk_invitation_emails(recipients=recipients)
+    for item in result.get("results", []):
+        if item.get("sent") and item.get("participant_id"):
+            store.increment_participant_send_count(item["participant_id"], "email")
     return result
 
 
@@ -182,6 +242,8 @@ def send_email_individual(
         body_text=body_text,
         qr_images=attachments,
     )
+    if result.get("sent"):
+        store.increment_participant_send_count(participant["id"], "email")
     return result
 
 

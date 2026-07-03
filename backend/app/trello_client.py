@@ -60,6 +60,23 @@ class TrelloClient:
         # custom_fields se ignora por ahora (se puede extender si se requiere)
         return self._req("POST", url, params={}, json=payload)
 
+    def add_attachment(
+        self,
+        *,
+        card_id: str,
+        file_bytes: bytes,
+        filename: str,
+        mime_type: str = "image/png",
+    ) -> Dict[str, Any]:
+        """Sube un archivo (ej. la invitación armada en PNG) como adjunto de la tarjeta."""
+        url = f"{self.base_url}/cards/{card_id}/attachments"
+        params = {"key": self.api_key, "token": self.api_token}
+        files = {"file": (filename, file_bytes, mime_type)}
+        r = requests.post(url, params=params, files=files, timeout=30)
+        if not (200 <= r.status_code < 300):
+            raise RuntimeError(f"Error Trello (adjunto) {r.status_code}: {r.text}")
+        return r.json()
+
     def ensure_env(self) -> None:
         # Validación mínima de IDs desde variables de entorno
         required = [

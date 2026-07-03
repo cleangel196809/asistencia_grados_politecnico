@@ -255,5 +255,20 @@ class AttendanceStore:
             query["event_id"] = event_id
         return self._clean_documents(list(self.db.participants.find(query).sort("created_at", 1)))
 
+    def increment_participant_send_count(self, participant_id: str, channel: str) -> Optional[Dict[str, Any]]:
+        """channel: 'email' o 'whatsapp'. Registra que se envio una invitacion por ese canal."""
+        participant = self.db.participants.find_one({"id": participant_id})
+        if not participant:
+            return None
+        count_field = f"{channel}_sent_count"
+        at_field = f"{channel}_sent_at"
+        new_count = int(participant.get(count_field, 0) or 0) + 1
+        self.db.participants.update_one(
+            {"id": participant_id},
+            {"$set": {count_field: new_count, at_field: datetime.utcnow().isoformat()}},
+        )
+        self._save_snapshot()
+        return self._clean_document(self.db.participants.find_one({"id": participant_id}))
+
 
 store = AttendanceStore()

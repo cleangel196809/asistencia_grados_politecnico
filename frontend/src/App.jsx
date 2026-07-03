@@ -62,6 +62,17 @@ function clearAuth() {
   localStorage.removeItem(AUTH_STORAGE_KEY);
 }
 
+function getErrorDetail(error, fallbackMessage) {
+  const detail = error?.response?.data?.detail;
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item?.msg || String(item)).join(' | ');
+  }
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+  return fallbackMessage;
+}
+
 function ProgressBar({ value, max, label, color }) {
   const safeMax = Number(max) || 0;
   const pct = safeMax > 0 ? Math.min(100, Math.round((Number(value) / safeMax) * 100)) : 0;
@@ -79,6 +90,26 @@ function ProgressBar({ value, max, label, color }) {
         />
       </div>
       <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.2rem' }}>{value}/{safeMax} ({pct}%)</div>
+    </div>
+  );
+}
+
+function SendChecklist({ participant }) {
+  const emailCount = participant.email_sent_count ?? 0;
+  const whatsappCount = participant.whatsapp_sent_count ?? 0;
+  const used = participant.used_qr_count ?? 0;
+  const total = participant.ticket_count ?? 1;
+  const item = (ok, text) => (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+      <span style={{ color: ok ? '#16a34a' : '#cbd5e1' }}>{ok ? '✅' : '⬜'}</span>
+      {text}
+    </span>
+  );
+  return (
+    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.85rem', marginTop: '0.2rem' }}>
+      {item(emailCount > 0, `Correo enviado${emailCount > 0 ? ` (${emailCount}x)` : ''}`)}
+      {item(whatsappCount > 0, `WhatsApp enviado${whatsappCount > 0 ? ` (${whatsappCount}x)` : ''}`)}
+      {item(used > 0, `Usadas: ${used}/${total}`)}
     </div>
   );
 }
@@ -143,6 +174,9 @@ function AdminPage({ user, onLogout }) {
   const [status, setStatus] = useState('');
   const [eventForm, setEventForm] = useState({ name: '', date: '', location: '', schedule: '', capacity: 100, mode: 'ONLINE', tickets_per_participant: 1 });
   const [participantForm, setParticipantForm] = useState({ name: '', cedula: '', email: '', phone: '', ticket_count: 1, sede: '', programa: '', cohorte: '', promedio: '' });
+  const [searchCedulaAdmin, setSearchCedulaAdmin] = useState('');
+  const [foundParticipantAdmin, setFoundParticipantAdmin] = useState(null);
+  const [searchStatusAdmin, setSearchStatusAdmin] = useState('');
   const [newUserForm, setNewUserForm] = useState({ username: '', password: '', role: ROLE_LOGISTICO });
   const [adminSendSettings, setAdminSendSettings] = useState({ emailFrom: '', whatsappFrom: '' });
   const [uploading, setUploading] = useState(false);
@@ -167,21 +201,11 @@ function AdminPage({ user, onLogout }) {
   const [isSendingBulkEmail, setIsSendingBulkEmail] = useState(false);
   const [emailSendProgress, setEmailSendProgress] = useState(null);
   const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
+  const [whatsappSendProgress, setWhatsappSendProgress] = useState(null);
   const [eventSummaries, setEventSummaries] = useState({});
   const [editingUserId, setEditingUserId] = useState(null);
   const [editUserForm, setEditUserForm] = useState({ role: '', password: '' });
 
-
-  const getErrorDetail = (error, fallbackMessage) => {
-    const detail = error?.response?.data?.detail;
-    if (Array.isArray(detail)) {
-      return detail.map((item) => item?.msg || String(item)).join(' | ');
-    }
-    if (typeof detail === 'string' && detail.trim()) {
-      return detail;
-    }
-    return fallbackMessage;
-  };
 
   const buildUploadTroubleshootingHint = (error) => {
     const statusCode = error?.response?.status;
@@ -403,6 +427,22 @@ function AdminPage({ user, onLogout }) {
     await api.delete(`/participants/${participantId}`);
     setStatus('Participante eliminado.');
     await loadParticipants(selectedEventId);
+  };
+
+  const searchParticipantByCedulaAdmin = async (event) => {
+    event.preventDefault();
+    if (!selectedEventId) {
+      setSearchStatusAdmin('Seleccione un evento antes de buscar.');
+      return;
+    }
+    const { data } = await api.get('/participants/search', { params: { cedula: searchCedulaAdmin, event_id: selectedEventId } });
+    if (!data.length) {
+      setFoundParticipantAdmin(null);
+      setSearchStatusAdmin('No se encontró un invitado con esa cédula en este evento.');
+      return;
+    }
+    setFoundParticipantAdmin(data[0]);
+    setSearchStatusAdmin('');
   };
 
   const createUser = async (event) => {
@@ -730,24 +770,40 @@ function AdminPage({ user, onLogout }) {
       return;
     }
 
-    setIsSendingWhatsApp(true);
-    try {
-      const fromNote = adminSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${adminSendSettings.whatsappFrom}` : '';
-      const whatsappText = `Hola, te invitamos al evento ${selectedEvent?.name || ''} en ${selectedEvent?.location || ''}. ${fromNote}`.trim();
-
-      const { data } = await api.post('/invitations/whatsapp/trello/program', {
-        event_id: selectedEventId,
-        whatsapp_text: whatsappText,
-      });
-
-      const created = data?.created ?? 0;
-      const errors = data?.errors ?? 0;
-      setStatus(`Trello: tarjetas creadas ${created}. Errores ${errors}.`);
-    } catch (error) {
-      setStatus(`No fue posible programar envíos WhatsApp en Trello. ${getErrorDetail(error, 'Intenta nuevamente.')}`);
-    } finally {
-      setIsSendingWhatsApp(false);
+    const targets = participants.filter((participant) => participant.phone);
+    if (!targets.length) {
+      setStatus('Ningún participante del evento tiene teléfono registrado.');
+      return;
     }
+
+    setIsSendingWhatsApp(true);
+    setWhatsappSendProgress({ sent: 0, total: targets.length, errors: 0 });
+    const fromNote = adminSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${adminSendSettings.whatsappFrom}` : '';
+    const whatsappText = `Hola, te invitamos al evento ${selectedEvent?.name || ''} en ${selectedEvent?.location || ''}. ${fromNote}`.trim();
+    let createdCount = 0;
+    let errorCount = 0;
+
+    for (let index = 0; index < targets.length; index += 1) {
+      const participant = targets[index];
+      try {
+        const { data } = await api.post('/invitations/whatsapp/trello/individual', {
+          event_id: selectedEventId,
+          participant_id: participant.id,
+          whatsapp_text: whatsappText,
+        });
+        if (data?.created) {
+          createdCount += 1;
+        } else {
+          errorCount += 1;
+        }
+      } catch (error) {
+        errorCount += 1;
+      }
+      setWhatsappSendProgress({ sent: index + 1, total: targets.length, errors: errorCount });
+    }
+
+    setIsSendingWhatsApp(false);
+    setStatus(`Trello: tarjetas creadas ${createdCount} de ${targets.length}. Errores ${errorCount}.`);
   };
 
   const sendAllEmail = async () => {
@@ -800,6 +856,27 @@ function AdminPage({ user, onLogout }) {
     } catch (error) {
       setStatus('Error enviando correo por SMTP. Se abre borrador de respaldo.');
       sendInvitation(participant, 'email');
+    }
+  };
+
+  const sendParticipantWhatsAppReal = async (participant) => {
+    const fromNote = adminSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${adminSendSettings.whatsappFrom}` : '';
+    const whatsappText = `Hola ${participant.name}. Estás invitado. ${fromNote}`.trim();
+    try {
+      const { data } = await api.post('/invitations/whatsapp/trello/individual', {
+        event_id: selectedEventId,
+        participant_id: participant.id,
+        whatsapp_text: whatsappText,
+      });
+      if (data?.created) {
+        setStatus(`Tarjeta de WhatsApp creada en Trello para ${participant.name} (con la invitación adjunta).`);
+        return;
+      }
+      setStatus('No se pudo crear la tarjeta en Trello. Se abrirá WhatsApp directo como respaldo.');
+      sendInvitation(participant, 'whatsapp');
+    } catch (error) {
+      setStatus(`No fue posible usar Trello (${getErrorDetail(error, 'sin configurar')}). Se abre WhatsApp directo como respaldo.`);
+      sendInvitation(participant, 'whatsapp');
     }
   };
 
@@ -953,6 +1030,31 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
         </label>
       </div>
 
+      <div className="card" style={{ marginTop: '1rem' }}>
+        <h3>Buscar invitado por cédula</h3>
+        <p style={{ marginTop: '-0.25rem', color: '#64748b' }}>
+          Consulta el estado de un invitado del evento activo: correos y WhatsApp enviados, e invitaciones usadas.
+        </p>
+        <form onSubmit={searchParticipantByCedulaAdmin} className="stack">
+          <input value={searchCedulaAdmin} onChange={(e) => setSearchCedulaAdmin(e.target.value)} placeholder="Cédula del invitado" disabled={!hasSelectedEventInAdmin} />
+          <button type="submit" disabled={!hasSelectedEventInAdmin}>Buscar</button>
+        </form>
+        {searchStatusAdmin && <div className="badge" style={{ marginTop: '0.5rem' }}>{searchStatusAdmin}</div>}
+        {foundParticipantAdmin && (
+          <div className="list-item" style={{ marginTop: '0.75rem' }}>
+            <strong>{foundParticipantAdmin.name}</strong>
+            <span>{foundParticipantAdmin.cedula} · {foundParticipantAdmin.programa || '-'} · {foundParticipantAdmin.sede || '-'}</span>
+            <span>{foundParticipantAdmin.email} · {foundParticipantAdmin.phone}</span>
+            <span>QR usados: {foundParticipantAdmin.used_qr_count ?? 0} · pendientes: {foundParticipantAdmin.pending_qr_count ?? foundParticipantAdmin.ticket_count ?? 1}</span>
+            <SendChecklist participant={foundParticipantAdmin} />
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <button onClick={() => sendParticipantEmailReal(foundParticipantAdmin)}>Enviar correo</button>
+              <button onClick={() => sendParticipantWhatsAppReal(foundParticipantAdmin)}>Enviar WhatsApp</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="stack" style={{ marginTop: '1rem' }}>
         {participants.map((participant) => (
           <div key={participant.id} className="list-item">
@@ -960,13 +1062,14 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
             <span>{participant.cedula} · {participant.programa || '-'} · {participant.sede || '-'}</span>
             <span>{participant.email} · {participant.phone}</span>
             <span>QR usados: {participant.used_qr_count ?? 0} · pendientes: {participant.pending_qr_count ?? participant.ticket_count ?? 1}</span>
+            <SendChecklist participant={participant} />
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
               <button onClick={() => generateQr(participant)}>Generar QR</button>
               <button onClick={() => viewComposedInvitation(participant)} disabled={isLoadingComposedInvitation || !invitationTemplate.exists}>
                 Ver invitación armada
               </button>
               <button onClick={() => sendParticipantEmailReal(participant)}>Enviar correo</button>
-              <button onClick={() => sendInvitation(participant, 'whatsapp')}>Enviar WhatsApp</button>
+              <button onClick={() => sendParticipantWhatsAppReal(participant)}>Enviar WhatsApp</button>
               <button onClick={() => removeParticipant(participant.id)}>Eliminar</button>
             </div>
           </div>
@@ -1170,12 +1273,20 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
           <button type="button" onClick={sendAllWhatsApp} disabled={!hasSelectedEventInAdmin || isSendingWhatsApp}>
-            {isSendingWhatsApp ? 'Programando en Trello...' : 'Programar WhatsApp masivo en Trello'}
+            {isSendingWhatsApp ? `Programando en Trello... ${whatsappSendProgress?.sent ?? 0}/${whatsappSendProgress?.total ?? 0}` : 'Programar WhatsApp masivo en Trello'}
           </button>
           <button type="button" onClick={sendAllEmailReal} disabled={!hasSelectedEventInAdmin || isSendingBulkEmail}>
             {isSendingBulkEmail ? `Enviando correos... ${emailSendProgress?.sent ?? 0}/${emailSendProgress?.total ?? 0}` : 'Enviar email masivo'}
           </button>
         </div>
+        {isSendingWhatsApp && whatsappSendProgress && (
+          <ProgressBar
+            value={whatsappSendProgress.sent}
+            max={whatsappSendProgress.total}
+            label={`Progreso de tarjetas en Trello (${whatsappSendProgress.errors} con error hasta ahora)`}
+            color="#25D366"
+          />
+        )}
         {isSendingBulkEmail && emailSendProgress && (
           <ProgressBar
             value={emailSendProgress.sent}
@@ -1369,6 +1480,27 @@ function LogisticsPage({ user, onLogout }) {
     }
   };
 
+  const sendWhatsAppReal = async (person) => {
+    const fromNote = logisticSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${logisticSendSettings.whatsappFrom}` : '';
+    const whatsappText = `Hola ${person.name}. Estás invitado al evento. ${fromNote}`.trim();
+    try {
+      const { data } = await api.post('/invitations/whatsapp/trello/individual', {
+        event_id: selectedEventId,
+        participant_id: person.id,
+        whatsapp_text: whatsappText,
+      });
+      if (data?.created) {
+        setStatus(`Tarjeta de WhatsApp creada en Trello para ${person.name} (con la invitación adjunta).`);
+        return;
+      }
+      setStatus('No se pudo crear la tarjeta en Trello. Se abrirá WhatsApp directo como respaldo.');
+      sendInvitation(person, 'whatsapp');
+    } catch (error) {
+      setStatus(`No fue posible usar Trello (${getErrorDetail(error, 'sin configurar')}). Se abre WhatsApp directo como respaldo.`);
+      sendInvitation(person, 'whatsapp');
+    }
+  };
+
   const selectedEvent = events.find((item) => item.id === selectedEventId);
   const checkedInCount = attendances.length;
   const availableCapacity = selectedEvent ? Number(selectedEvent.capacity || 0) - checkedInCount : 0;
@@ -1451,7 +1583,7 @@ function LogisticsPage({ user, onLogout }) {
           <input value={logisticSendSettings.emailFrom} onChange={(e) => setLogisticSendSettings({ ...logisticSendSettings, emailFrom: e.target.value })} placeholder="Correo remitente" />
           {participant && (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
-              <button type="button" onClick={() => sendInvitation(participant, 'whatsapp')}>Enviar WhatsApp</button>
+              <button type="button" onClick={() => sendWhatsAppReal(participant)}>Enviar WhatsApp</button>
               <button type="button" onClick={() => sendEmailReal(participant)}>Enviar Email</button>
             </div>
           )}
@@ -1467,6 +1599,7 @@ function LogisticsPage({ user, onLogout }) {
             <p>Usó códigos: {participant.used_qr_count || 0}</p>
             <p>Invitaciones pendientes: {participant.pending_qr_count || 0}</p>
             <p>Estado: {attendances.some((entry) => entry.participant_id === participant.id) ? 'Ingresó' : 'Sin ingreso'}</p>
+            <SendChecklist participant={participant} />
           </div>
         )}
       </section>
