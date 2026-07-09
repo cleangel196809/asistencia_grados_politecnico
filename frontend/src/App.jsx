@@ -114,6 +114,48 @@ function SendChecklist({ participant }) {
   );
 }
 
+function PreviewModal({ preview, onConfirm, onCancel, isSending }) {
+  if (!preview) return null;
+  return (
+    <div className="preview-overlay" role="dialog" aria-modal="true" onClick={onCancel}>
+      <div className="preview-modal" onClick={(e) => e.stopPropagation()}>
+        <h3>{preview.title}</h3>
+        {preview.recipientCount != null && (
+          <div className="preview-field">
+            <label>Destinatarios</label>
+            <div>{preview.recipientCount} invitado(s) recibirán este mensaje.</div>
+          </div>
+        )}
+        {preview.subject && (
+          <div className="preview-field">
+            <label>Asunto</label>
+            <div>{preview.subject}</div>
+          </div>
+        )}
+        {preview.body && (
+          <div className="preview-field">
+            <label>Mensaje (ejemplo con el primer invitado)</label>
+            <div className="preview-body">{preview.body}</div>
+          </div>
+        )}
+        {preview.sampleImage && (
+          <div className="preview-field">
+            <label>Invitación adjunta (ejemplo)</label>
+            <img className="preview-thumb" src={preview.sampleImage} alt="Vista previa de la invitación" />
+          </div>
+        )}
+        {preview.note && <div className="badge" style={{ background: '#fff7ed', color: '#9a3412' }}>{preview.note}</div>}
+        <div className="preview-actions">
+          <button type="button" onClick={onConfirm} disabled={isSending}>
+            {isSending ? 'Enviando…' : 'Confirmar y enviar'}
+          </button>
+          <button type="button" className="secondary" onClick={onCancel} disabled={isSending}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const PARTICIPANTS_PREFIX = 'participants:';
 const QUEUE_KEY = 'attendance-queue';
 const ROLE_ADMIN = 'ADMIN';
@@ -146,7 +188,10 @@ function LoginScreen({ onLogin }) {
   };
 
   return (
-    <div className="card">
+    <div className="card" style={{ maxWidth: '420px', margin: '3rem auto' }}>
+      <div style={{ textAlign: 'center', marginBottom: '1.2rem' }}>
+        <img src="/brand/logo-politecnico.png" alt="Politécnico Internacional" style={{ maxWidth: '260px', width: '100%' }} />
+      </div>
       <h2>Ingresar al panel</h2>
       <p>Seleccione el rol para abrir el layout correspondiente.</p>
       <form onSubmit={submit} className="stack">
@@ -205,6 +250,10 @@ function AdminPage({ user, onLogout }) {
   const [eventSummaries, setEventSummaries] = useState({});
   const [editingUserId, setEditingUserId] = useState(null);
   const [editUserForm, setEditUserForm] = useState({ role: '', password: '' });
+  const [bulkEmailPreview, setBulkEmailPreview] = useState(null);
+  const [bulkWhatsappPreview, setBulkWhatsappPreview] = useState(null);
+  const [editingEventId, setEditingEventId] = useState(null);
+  const [editEventForm, setEditEventForm] = useState({ name: '', date: '', location: '', schedule: '', capacity: 100, mode: 'ONLINE', tickets_per_participant: 1 });
 
 
   const buildUploadTroubleshootingHint = (error) => {
@@ -492,6 +541,30 @@ function AdminPage({ user, onLogout }) {
     await loadEvents();
   };
 
+  const startEditEvent = (targetEvent) => {
+    setEditingEventId(targetEvent.id);
+    setEditEventForm({
+      name: targetEvent.name || '',
+      date: targetEvent.date || '',
+      location: targetEvent.location || '',
+      schedule: targetEvent.schedule || '',
+      capacity: Number(targetEvent.capacity || 0),
+      mode: targetEvent.mode || 'ONLINE',
+      tickets_per_participant: Number(targetEvent.tickets_per_participant || 1),
+    });
+  };
+
+  const cancelEditEvent = () => {
+    setEditingEventId(null);
+  };
+
+  const saveEditEvent = async () => {
+    await api.put(`/events/${editingEventId}`, editEventForm);
+    setStatus('Evento actualizado correctamente.');
+    setEditingEventId(null);
+    await loadEvents();
+  };
+
   const downloadReport = async () => {
     if (!selectedEventId) {
       setStatus('Seleccione un evento para descargar el reporte.');
@@ -507,6 +580,28 @@ function AdminPage({ user, onLogout }) {
     link.remove();
     URL.revokeObjectURL(url);
     setStatus('Reporte descargado.');
+  };
+
+  const [isDownloadingBackup, setIsDownloadingBackup] = useState(false);
+  const downloadBackup = async () => {
+    setIsDownloadingBackup(true);
+    try {
+      const response = await api.get('/admin/backup', { responseType: 'blob' });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      link.download = `backup_asistencia_${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setStatus('Backup descargado correctamente.');
+    } catch (error) {
+      setStatus('No se pudo generar el backup.');
+    } finally {
+      setIsDownloadingBackup(false);
+    }
   };
 
   const generateQr = async (participant) => {
@@ -762,6 +857,27 @@ function AdminPage({ user, onLogout }) {
   };
 
   // WhatsApp masivo -> Trello (1 card por invitado)
+  const openBulkWhatsappPreview = () => {
+    const selectedEvent = events.find((item) => item.id === selectedEventId);
+    if (!selectedEventId) {
+      setStatus('Seleccione un evento antes del envío masivo.');
+      return;
+    }
+    const targets = participants.filter((participant) => participant.phone);
+    if (!targets.length) {
+      setStatus('Ningún participante del evento tiene teléfono registrado.');
+      return;
+    }
+    const fromNote = adminSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${adminSendSettings.whatsappFrom}` : '';
+    const whatsappText = `Hola, te invitamos al evento ${selectedEvent?.name || ''} en ${selectedEvent?.location || ''}. ${fromNote}`.trim();
+    setBulkWhatsappPreview({
+      title: 'Vista previa · WhatsApp masivo',
+      recipientCount: targets.length,
+      body: whatsappText,
+      note: 'Se crea una tarjeta en Trello por cada invitado, con su invitación adjunta, para que el equipo la envíe desde WhatsApp Business.',
+    });
+  };
+
   const sendAllWhatsApp = async () => {
     if (isSendingWhatsApp) return; // evita doble envío por doble clic mientras está en curso
     const selectedEvent = events.find((item) => item.id === selectedEventId);
@@ -880,6 +996,43 @@ function AdminPage({ user, onLogout }) {
     }
   };
 
+  const openBulkEmailPreview = async () => {
+    if (!selectedEventId) {
+      setStatus('Seleccione un evento antes del envío masivo.');
+      return;
+    }
+    const targets = participants.filter((participant) => participant.email);
+    if (!targets.length) {
+      setStatus('Ningún participante del evento tiene correo registrado.');
+      return;
+    }
+    const selectedEvent = events.find((item) => item.id === selectedEventId);
+    const sample = targets[0];
+    const ticketCount = Math.max(1, Number(sample.ticket_count || 1));
+    const ticketWord = ticketCount === 1 ? 'invitación' : 'invitaciones';
+    const body = `Hola ${sample.name}, te invitamos al evento ${selectedEvent?.name || ''} en ${selectedEvent?.location || ''} el ${selectedEvent?.date || ''}.\n\nAdjuntamos tu(s) ${ticketCount} ${ticketWord} de ingreso, cada una con su código QR único.`;
+
+    setBulkEmailPreview({
+      title: 'Vista previa · Email masivo',
+      recipientCount: targets.length,
+      subject: `Invitación a ${selectedEvent?.name || 'evento'}`,
+      body,
+      note: !emailConfigured ? 'SMTP no configurado: se abrirá el borrador de correo (mailto) como respaldo en vez de enviar de verdad.' : null,
+    });
+
+    if (emailConfigured && invitationTemplate.exists) {
+      try {
+        const { data } = await api.get(`/events/${selectedEventId}/invitation/${sample.id}`);
+        const sampleImage = data?.invitations?.[0]?.image;
+        if (sampleImage) {
+          setBulkEmailPreview((prev) => (prev ? { ...prev, sampleImage } : prev));
+        }
+      } catch (error) {
+        // sin imagen de muestra no es bloqueante, la vista previa de texto sigue siendo util
+      }
+    }
+  };
+
   const sendAllEmailReal = async () => {
     if (isSendingBulkEmail) return; // evita doble envío por doble clic mientras está en curso
     if (!selectedEventId) {
@@ -932,6 +1085,49 @@ function AdminPage({ user, onLogout }) {
   const selectedEventInAdmin = events.find((item) => item.id === selectedEventId);
   const hasSelectedEventInAdmin = Boolean(selectedEventId && selectedEventInAdmin);
 
+  const adminAggregate = Object.values(eventSummaries).reduce(
+    (acc, summary) => ({
+      participants: acc.participants + Number(summary?.participants_count || 0),
+      totalInvitations: acc.totalInvitations + Number(summary?.total_invitations || 0),
+      usedInvitations: acc.usedInvitations + Number(summary?.used_invitations || 0),
+      insideNow: acc.insideNow + Number(summary?.currently_inside || 0),
+    }),
+    { participants: 0, totalInvitations: 0, usedInvitations: 0, insideNow: 0 },
+  );
+  const attendancePct = adminAggregate.totalInvitations
+    ? Math.round((adminAggregate.usedInvitations / adminAggregate.totalInvitations) * 100)
+    : 0;
+
+  const dashboardTiles = (
+    <div className="dash-tiles">
+      <div className="dash-tile">
+        <div className="dash-label">Ceremonias</div>
+        <div className="dash-value">{events.length}</div>
+        <div className="dash-sub">eventos configurados</div>
+      </div>
+      <div className="dash-tile">
+        <div className="dash-label">Invitados</div>
+        <div className="dash-value">{adminAggregate.participants}</div>
+        <div className="dash-sub">en todos los eventos</div>
+      </div>
+      <div className="dash-tile accent-good">
+        <div className="dash-label">Ingresos registrados</div>
+        <div className="dash-value">{adminAggregate.usedInvitations}</div>
+        <div className="dash-sub">de {adminAggregate.totalInvitations} invitaciones ({attendancePct}%)</div>
+      </div>
+      <div className="dash-tile">
+        <div className="dash-label">Actualmente adentro</div>
+        <div className="dash-value">{adminAggregate.insideNow}</div>
+        <div className="dash-sub">boletas sin salida registrada</div>
+      </div>
+      <div className="dash-tile">
+        <div className="dash-label">Correo institucional</div>
+        <div className="dash-value" style={{ fontSize: '1.1rem' }}>{emailConfigured ? 'Activo' : 'No configurado'}</div>
+        <div className="dash-sub">SMTP para envío de invitaciones</div>
+      </div>
+    </div>
+  );
+
   const banner = (
     <div className="card">
       <h3>Evento activo</h3>
@@ -979,6 +1175,26 @@ function AdminPage({ user, onLogout }) {
       <div className="stack">
         {events.map((event) => {
           const summary = eventSummaries[event.id];
+          if (editingEventId === event.id) {
+            return (
+              <div key={event.id} className="list-item">
+                <input value={editEventForm.name} onChange={(e) => setEditEventForm({ ...editEventForm, name: e.target.value })} placeholder="Nombre del evento" />
+                <input type="date" value={editEventForm.date} onChange={(e) => setEditEventForm({ ...editEventForm, date: e.target.value })} />
+                <input value={editEventForm.location} onChange={(e) => setEditEventForm({ ...editEventForm, location: e.target.value })} placeholder="Lugar" />
+                <input value={editEventForm.schedule} onChange={(e) => setEditEventForm({ ...editEventForm, schedule: e.target.value })} placeholder="Horario (ej. 08:00 - 12:00)" />
+                <input type="number" value={editEventForm.capacity} onChange={(e) => setEditEventForm({ ...editEventForm, capacity: Number(e.target.value) })} placeholder="Capacidad" />
+                <input type="number" min={1} value={editEventForm.tickets_per_participant} onChange={(e) => setEditEventForm({ ...editEventForm, tickets_per_participant: Number(e.target.value) })} placeholder="Invitaciones por participante" />
+                <select value={editEventForm.mode} onChange={(e) => setEditEventForm({ ...editEventForm, mode: e.target.value })}>
+                  <option value="ONLINE">ONLINE</option>
+                  <option value="OFFLINE">OFFLINE</option>
+                </select>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button onClick={saveEditEvent}>Guardar cambios</button>
+                  <button style={{ background: '#e2e8f0', color: '#334155' }} onClick={cancelEditEvent}>Cancelar</button>
+                </div>
+              </div>
+            );
+          }
           return (
             <div key={event.id} className="list-item">
               <strong>{event.name}</strong>
@@ -994,6 +1210,7 @@ function AdminPage({ user, onLogout }) {
                 />
               )}
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button onClick={() => startEditEvent(event)}>Editar evento</button>
                 <button onClick={() => deleteEvent(event.id)}>Eliminar evento</button>
               </div>
             </div>
@@ -1272,13 +1489,31 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
           Envío de correo: {emailConfigured ? 'SMTP configurado en el servidor' : 'SMTP no configurado — se usará borrador de correo (mailto) como respaldo'}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+          <button type="button" onClick={openBulkWhatsappPreview} disabled={!hasSelectedEventInAdmin || isSendingWhatsApp} style={{ background: 'var(--surface-alt)', color: 'var(--ink)', border: '1px solid var(--border)' }}>
+            Vista previa WhatsApp
+          </button>
           <button type="button" onClick={sendAllWhatsApp} disabled={!hasSelectedEventInAdmin || isSendingWhatsApp}>
             {isSendingWhatsApp ? `Programando en Trello... ${whatsappSendProgress?.sent ?? 0}/${whatsappSendProgress?.total ?? 0}` : 'Programar WhatsApp masivo en Trello'}
+          </button>
+          <button type="button" onClick={openBulkEmailPreview} disabled={!hasSelectedEventInAdmin || isSendingBulkEmail} style={{ background: 'var(--surface-alt)', color: 'var(--ink)', border: '1px solid var(--border)' }}>
+            Vista previa Email
           </button>
           <button type="button" onClick={sendAllEmailReal} disabled={!hasSelectedEventInAdmin || isSendingBulkEmail}>
             {isSendingBulkEmail ? `Enviando correos... ${emailSendProgress?.sent ?? 0}/${emailSendProgress?.total ?? 0}` : 'Enviar email masivo'}
           </button>
         </div>
+        <PreviewModal
+          preview={bulkWhatsappPreview}
+          isSending={isSendingWhatsApp}
+          onCancel={() => setBulkWhatsappPreview(null)}
+          onConfirm={async () => { setBulkWhatsappPreview(null); await sendAllWhatsApp(); }}
+        />
+        <PreviewModal
+          preview={bulkEmailPreview}
+          isSending={isSendingBulkEmail}
+          onCancel={() => setBulkEmailPreview(null)}
+          onConfirm={async () => { setBulkEmailPreview(null); await sendAllEmailReal(); }}
+        />
         {isSendingWhatsApp && whatsappSendProgress && (
           <ProgressBar
             value={whatsappSendProgress.sent}
@@ -1343,17 +1578,31 @@ No | DOCUMENTO | SEDE | PROGRAMA | APELLIDOS Y NOMBRES | TEL1 | EMAIL INSTITUCIO
     </>
   );
 
+  const step6 = (
+    <>
+      <p style={{ color: 'var(--ink-muted)', marginTop: '-0.25rem' }}>
+        Descarga una copia completa de la base de datos (eventos, participantes, asistencias y usuarios) en un
+        archivo JSON. Es solo lectura: no borra ni modifica nada en el sistema.
+      </p>
+      <button type="button" onClick={downloadBackup} disabled={isDownloadingBackup}>
+        {isDownloadingBackup ? 'Generando backup…' : 'Descargar backup completo (JSON)'}
+      </button>
+    </>
+  );
+
   return (
     <AdminLayoutFiveSteps
       user={user}
       status={status}
       onLogout={onLogout}
+      dashboard={dashboardTiles}
       banner={banner}
       step1={step1}
       step2={step2}
       step3={step3}
       step4={step4}
       step5={step5}
+      step6={step6}
     />
   );
 }
@@ -1368,6 +1617,8 @@ function LogisticsPage({ user, onLogout }) {
   const [logisticSendSettings, setLogisticSendSettings] = useState({ emailFrom: '', whatsappFrom: '' });
   const [status, setStatus] = useState('');
   const [allParticipants, setAllParticipants] = useState([]);
+  const [sendPreview, setSendPreview] = useState(null);
+  const [isSendingPreview, setIsSendingPreview] = useState(false);
 
   const loadEvents = async () => {
     const { data } = await api.get('/events');
@@ -1505,6 +1756,28 @@ function LogisticsPage({ user, onLogout }) {
   const checkedInCount = attendances.length;
   const availableCapacity = selectedEvent ? Number(selectedEvent.capacity || 0) - checkedInCount : 0;
 
+  const openEmailPreview = (person) => {
+    const body = `Hola ${person.name}, te invitamos al evento ${selectedEvent?.name || ''} en ${selectedEvent?.location || ''} el ${selectedEvent?.date || ''}.\n\nAdjuntamos tu(s) ${person.ticket_count || 1} invitación(es) de ingreso, cada una con su código QR único.`;
+    setSendPreview({
+      title: 'Vista previa · Correo individual',
+      subject: `Invitación a ${selectedEvent?.name || 'evento'}`,
+      body,
+      note: `Se enviará a ${person.email || '(sin correo registrado)'}.`,
+      onConfirm: () => sendEmailReal(person),
+    });
+  };
+
+  const openWhatsappPreview = (person) => {
+    const fromNote = logisticSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${logisticSendSettings.whatsappFrom}` : '';
+    const whatsappText = `Hola ${person.name}. Estás invitado al evento. ${fromNote}`.trim();
+    setSendPreview({
+      title: 'Vista previa · WhatsApp individual',
+      body: whatsappText,
+      note: `Se creará una tarjeta en Trello para ${person.phone || '(sin teléfono registrado)'}.`,
+      onConfirm: () => sendWhatsAppReal(person),
+    });
+  };
+
   return (
     <div className="page">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
@@ -1542,23 +1815,32 @@ function LogisticsPage({ user, onLogout }) {
         </form>
 
         {selectedEvent && (
-          <div className="card" style={{ marginTop: '1rem' }}>
-            <h3>Resumen de aforo</h3>
-            <p>Total de ingresos: {checkedInCount}</p>
-            <p>Aforo disponible: {availableCapacity}</p>
-            <p>Capacidad total: {selectedEvent.capacity}</p>
-            <p>Total de invitaciones usadas: {attendances.length}</p>
-            <ProgressBar value={checkedInCount} max={Number(selectedEvent.capacity) || 0} label="Ocupación del aforo" color="#2563eb" />
+          <div className="dash-tiles">
+            <div className="dash-tile">
+              <div className="dash-label">Ingresos</div>
+              <div className="dash-value">{checkedInCount}</div>
+              <div className="dash-sub">de {selectedEvent.capacity} de aforo</div>
+            </div>
+            <div className="dash-tile accent-good">
+              <div className="dash-label">Aforo disponible</div>
+              <div className="dash-value">{availableCapacity}</div>
+              <div className="dash-sub">cupos restantes</div>
+            </div>
+            <div className="dash-tile">
+              <div className="dash-label">Invitados</div>
+              <div className="dash-value">{allParticipants.length}</div>
+              <div className="dash-sub">registrados en este evento</div>
+            </div>
+            <div className="dash-tile">
+              <div className="dash-label">Invitaciones usadas</div>
+              <div className="dash-value">{invitationSummary.used}</div>
+              <div className="dash-sub">de {invitationSummary.total} emitidas · {invitationSummary.pending} pendientes</div>
+            </div>
           </div>
         )}
-
         {selectedEvent && (
           <div className="card" style={{ marginTop: '1rem' }}>
-            <h3>Informe de invitaciones (todo el evento)</h3>
-            <p>Invitados registrados: {allParticipants.length}</p>
-            <p>Invitaciones emitidas (total QR): {invitationSummary.total}</p>
-            <p>Invitaciones utilizadas: {invitationSummary.used}</p>
-            <p>Invitaciones pendientes: {invitationSummary.pending}</p>
+            <ProgressBar value={checkedInCount} max={Number(selectedEvent.capacity) || 0} label="Ocupación del aforo" color="var(--brand-cyan)" />
             <ProgressBar value={invitationSummary.used} max={invitationSummary.total} label="Actividad del evento (invitaciones usadas)" color="#16a34a" />
           </div>
         )}
@@ -1583,11 +1865,27 @@ function LogisticsPage({ user, onLogout }) {
           <input value={logisticSendSettings.emailFrom} onChange={(e) => setLogisticSendSettings({ ...logisticSendSettings, emailFrom: e.target.value })} placeholder="Correo remitente" />
           {participant && (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+              <button type="button" onClick={() => openWhatsappPreview(participant)} style={{ background: 'var(--surface-alt)', color: 'var(--ink)', border: '1px solid var(--border)' }}>Vista previa WhatsApp</button>
               <button type="button" onClick={() => sendWhatsAppReal(participant)}>Enviar WhatsApp</button>
+              <button type="button" onClick={() => openEmailPreview(participant)} style={{ background: 'var(--surface-alt)', color: 'var(--ink)', border: '1px solid var(--border)' }}>Vista previa Email</button>
               <button type="button" onClick={() => sendEmailReal(participant)}>Enviar Email</button>
             </div>
           )}
         </div>
+        <PreviewModal
+          preview={sendPreview}
+          isSending={isSendingPreview}
+          onCancel={() => setSendPreview(null)}
+          onConfirm={async () => {
+            const action = sendPreview?.onConfirm;
+            setSendPreview(null);
+            if (action) {
+              setIsSendingPreview(true);
+              await action();
+              setIsSendingPreview(false);
+            }
+          }}
+        />
 
         {participant && (
           <div className="card" style={{ marginTop: '1rem' }}>
@@ -1618,8 +1916,25 @@ function ScannerPage({ user, onLogout }) {
   const [scannerError, setScannerError] = useState('');
   const [manualCode, setManualCode] = useState('');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [toast, setToast] = useState(null);
+  const [scanDirection, setScanDirection] = useState('in');
   const scannerRef = useRef(null);
   const html5QrCodeRef = useRef(null);
+  const toastTimeoutRef = useRef(null);
+
+  const showToast = (type, text, sub) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    setToast({ type, text, sub, key: Date.now() });
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 3000);
+  };
+
+  useEffect(() => () => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+  }, []);
 
   const loadEvents = async () => {
     const { data } = await api.get('/events');
@@ -1732,57 +2047,46 @@ function ScannerPage({ user, onLogout }) {
       const participant = participants.find((item) => item.id === payload.participant_id);
       if (!participant) {
         setStatus('QR no encontrado en la lista del evento.');
-        window.alert('QR no válido para este evento.');
+        showToast('invalid', 'QR no válido para este evento.', 'Listo para escanear el siguiente.');
         setLog((prev) => [{ status: 'invalid', message: 'QR inválido', time: new Date().toLocaleTimeString(), participant: payload.cedula }, ...prev]);
         return;
       }
 
       const ticketCount = Number(participant.ticket_count || 1);
-      const priorUsed = Number(participant.used_qr_count || 0);
-      const sessionUsed = log.filter((entry) => entry.participantId === participant.id && (entry.status === 'valid' || entry.status === 'queued')).length;
-
-      const alreadyUsed = log.some((entry) => entry.participantId === participant.id);
-      if (alreadyUsed) {
-        setStatus('Duplicado: este invitado ya registró ingreso.');
-        setScanResult({
-          participant,
-          status: 'duplicate',
-          message: 'Este invitado ya registró ingreso.',
-          usedCount: priorUsed + sessionUsed,
-          pendingCount: Math.max(0, ticketCount - (priorUsed + sessionUsed)),
-          ticketCount,
-        });
-        window.alert('Este usuario ya ingresó.');
-        setLog((prev) => [{ status: 'duplicate', message: 'Duplicado', time: new Date().toLocaleTimeString(), participantId: participant.id }, ...prev]);
-        return;
-      }
-
-      const usedCount = priorUsed + sessionUsed + 1;
-      const pendingCount = Math.max(0, ticketCount - usedCount);
 
       if (isOnline) {
-        const { data } = await api.post('/attendance/scan', { event_id: selectedEventId, payload: decodedText, source: 'online' });
-        const message = data.status === 'valid' ? 'Entrada registrada correctamente.' : 'Este invitado ya ingresó.';
+        const { data } = await api.post('/attendance/scan', {
+          event_id: selectedEventId,
+          payload: decodedText,
+          source: 'online',
+          action: scanDirection,
+        });
+        const message = data.message || (data.status === 'valid' ? 'Registrado correctamente.' : 'Esta boleta ya fue registrada en ese estado.');
         setStatus(message);
-        setScanResult({ participant, status: data.status, message, usedCount, pendingCount, ticketCount });
+        setScanResult({ participant, status: data.status, direction: data.direction, message, ticketCount });
         const updatedAttendances = await api.get(`/attendances/${selectedEventId}`).then((resp) => resp.data).catch(() => attendances);
         setAttendances(updatedAttendances);
-        window.alert(message);
-        setLog((prev) => [{ status: data.status, message, time: new Date().toLocaleTimeString(), participantId: participant.id }, ...prev]);
+        const label = data.direction === 'out' ? 'Salida' : 'Ingreso';
+        showToast(
+          data.status === 'valid' ? 'valid' : 'duplicate',
+          data.status === 'valid' ? `${participant.name} — ${label.toLowerCase()} validado.` : `${participant.name} — ${message}`,
+          'Listo para escanear el siguiente.',
+        );
+        setLog((prev) => [{ status: data.status, message: `${label}: ${message}`, time: new Date().toLocaleTimeString(), participantId: participant.id }, ...prev]);
       } else {
         const queue = (await get(QUEUE_KEY)) || [];
-        const item = { event_id: selectedEventId, payload: decodedText, source: 'offline' };
+        const item = { event_id: selectedEventId, payload: decodedText, source: 'offline', action: scanDirection };
         await set(QUEUE_KEY, [...queue, item]);
         const message = 'Escaneo guardado para sincronizar cuando vuelva la conexión.';
         setStatus(message);
-        setScanResult({ participant, status: 'queued', message, usedCount, pendingCount, ticketCount });
-        window.alert(message);
+        setScanResult({ participant, status: 'queued', direction: scanDirection, message, ticketCount });
+        showToast('queued', `${participant.name} — guardado offline.`, 'Se sincronizará al volver la conexión. Listo para el siguiente.');
         setLog((prev) => [{ status: 'queued', message, time: new Date().toLocaleTimeString(), participantId: participant.id }, ...prev]);
       }
     } catch (error) {
       setStatus('QR inválido.');
       setScanResult(null);
-      window.alert('QR inválido.');
+      showToast('invalid', 'QR inválido.', 'Listo para escanear el siguiente.');
       setLog((prev) => [{ status: 'invalid', message: 'QR inválido', time: new Date().toLocaleTimeString() }, ...prev]);
     }
   };
@@ -1817,10 +2121,40 @@ function ScannerPage({ user, onLogout }) {
         </div>
         <button onClick={() => onLogout(null)}>Cerrar sesión</button>
       </div>
-      <p>Escanee el QR del invitado para validar el ingreso.</p>
+      <p>Escanee el QR del invitado para validar su ingreso o salida.</p>
       <div className="badge">{isOnline ? 'ONLINE' : 'OFFLINE'}</div>
+      <div className="stack" style={{ marginBottom: '0.8rem' }}>
+        <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>Modo de esta estación:</span>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            type="button"
+            onClick={() => setScanDirection('in')}
+            style={{ flex: 1, background: scanDirection === 'in' ? '#16a34a' : '#e2e8f0', color: scanDirection === 'in' ? 'white' : '#334155' }}
+          >
+            Ingreso
+          </button>
+          <button
+            type="button"
+            onClick={() => setScanDirection('out')}
+            style={{ flex: 1, background: scanDirection === 'out' ? '#4f46e5' : '#e2e8f0', color: scanDirection === 'out' ? 'white' : '#334155' }}
+          >
+            Salida
+          </button>
+        </div>
+      </div>
       {scannerError && (
         <div className="badge" style={{ background: '#fee2e2', color: '#991b1b' }}>{scannerError}</div>
+      )}
+      {toast && (
+        <div className={`scan-toast ${toast.type}`} key={toast.key} role="status" aria-live="polite">
+          <span className="scan-toast-icon" aria-hidden="true">
+            {toast.type === 'valid' ? '✓' : toast.type === 'invalid' ? '✕' : toast.type === 'queued' ? '↻' : '!'}
+          </span>
+          <span>
+            {toast.text}
+            {toast.sub && <span className="scan-toast-sub">{toast.sub}</span>}
+          </span>
+        </div>
       )}
       <div className="card-grid">
         <section className="card">
@@ -1844,16 +2178,30 @@ function ScannerPage({ user, onLogout }) {
             <div style={{ marginTop: '1rem' }}>
               <p><strong>{scanResult.participant.name}</strong></p>
               <p>Cédula: {scanResult.participant.cedula}</p>
-              <p>Estado: {scanResult.status === 'valid' ? 'Ingreso validado' : scanResult.status === 'duplicate' ? 'QR ya utilizado (rechazado)' : scanResult.status === 'queued' ? 'Guardado offline, pendiente de sincronizar' : 'Inválido'}</p>
-              <p>QR usados de este invitado: {scanResult.usedCount} de {scanResult.ticketCount}</p>
-              <p>QR pendientes de este invitado: {scanResult.pendingCount}</p>
+              <p>
+                Estado:{' '}
+                {scanResult.status === 'valid'
+                  ? scanResult.direction === 'out' ? 'Salida validada' : 'Ingreso validado'
+                  : scanResult.status === 'duplicate' ? 'Rechazado (ya estaba en ese estado)'
+                  : scanResult.status === 'queued' ? 'Guardado offline, pendiente de sincronizar'
+                  : 'Inválido'}
+              </p>
+              <p>Boletas de este invitado: {scanResult.ticketCount}</p>
             </div>
           ) : (
             <p>Escanee un QR válido para ver el detalle del invitado.</p>
           )}
-          <div style={{ marginTop: '1rem' }}>
-            <p>Total códigos usados en este evento: {attendances.length}</p>
-            <p>Escaneos válidos recientes: {log.filter((entry) => entry.status === 'valid').length}</p>
+          <div className="dash-tiles" style={{ marginTop: '1rem' }}>
+            <div className="dash-tile">
+              <div className="dash-label">Códigos usados</div>
+              <div className="dash-value">{attendances.length}</div>
+              <div className="dash-sub">en este evento</div>
+            </div>
+            <div className="dash-tile accent-good">
+              <div className="dash-label">Escaneos válidos</div>
+              <div className="dash-value">{log.filter((entry) => entry.status === 'valid').length}</div>
+              <div className="dash-sub">en esta sesión</div>
+            </div>
           </div>
           <div className="stack">
             {log.slice(0, 8).map((entry, index) => (
@@ -1902,7 +2250,13 @@ function App() {
   return (
     <div className="app-shell">
       <nav className="topbar">
-        <h2>Asistencia del Politécnico Internacional</h2>
+        <div className="brand">
+          <img src="/brand/logo-shield.png" alt="Politécnico Internacional" />
+          <div className="brand-text">
+            <strong>Politécnico Internacional</strong>
+            <span>Control de asistencia a grados</span>
+          </div>
+        </div>
         <div className="nav-links">
           <Link to="/">Inicio</Link>
           <Link to="/admin">Administración</Link>

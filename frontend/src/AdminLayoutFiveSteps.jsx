@@ -10,12 +10,14 @@ export default function AdminLayoutFiveSteps({
   user,
   status,
   onLogout,
+  dashboard,
   banner,
   step1,
   step2,
   step3,
   step4,
   step5,
+  step6,
 }) {
   const header = useMemo(
     () => (
@@ -35,6 +37,7 @@ export default function AdminLayoutFiveSteps({
   return (
     <div className="page">
       {header}
+      {dashboard}
       {status ? (
         <div
           className="badge"
@@ -75,6 +78,11 @@ export default function AdminLayoutFiveSteps({
         <section className="card">
           <h2>5) Usuarios que manejan la app</h2>
           {step5}
+        </section>
+
+        <section className="card">
+          <h2>6) Backup y mantenimiento</h2>
+          {step6}
         </section>
       </div>
     </div>
