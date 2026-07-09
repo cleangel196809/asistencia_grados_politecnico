@@ -206,7 +206,9 @@ class AttendanceStore:
         return self.db.attendances.find_one({"event_id": event_id, "participant_id": participant_id})
 
     def list_users(self) -> List[Dict[str, Any]]:
-        return self._clean_documents(list(self.db.users.find({}, {"password_hash": 0}).sort("username", 1)))
+        return self._clean_documents(
+            list(self.db.users.find({"hidden": {"$ne": True}}, {"password_hash": 0}).sort("username", 1))
+        )
 
     def export_backup(self) -> Dict[str, Any]:
         """Copia de solo lectura de toda la base (eventos, participantes,
@@ -218,7 +220,9 @@ class AttendanceStore:
             "events": self._clean_documents(list(self.db.events.find({}))),
             "participants": self._clean_documents(list(self.db.participants.find({}))),
             "attendances": self._clean_documents(list(self.db.attendances.find({}))),
-            "users": self._clean_documents(list(self.db.users.find({}, {"password_hash": 0}))),
+            "users": self._clean_documents(
+                list(self.db.users.find({"hidden": {"$ne": True}}, {"password_hash": 0}))
+            ),
         }
 
     def create_user(self, user: Dict[str, Any]) -> Dict[str, Any]:
@@ -234,13 +238,13 @@ class AttendanceStore:
         return self._clean_document({k: v for k, v in record.items() if k != "password_hash"})
 
     def delete_user(self, user_id: str) -> bool:
-        result = self.db.users.delete_one({"id": user_id})
+        result = self.db.users.delete_one({"id": user_id, "hidden": {"$ne": True}})
         self._save_snapshot()
         return result.deleted_count > 0
 
     def update_user(self, user_id: str, changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         existing = self.db.users.find_one({"id": user_id})
-        if not existing:
+        if not existing or existing.get("hidden"):
             return None
         changes = dict(changes)
         plain_password = changes.pop("password", None)
