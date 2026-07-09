@@ -278,6 +278,7 @@ class AttendanceScan(BaseModel):
     event_id: str
     payload: str
     source: str = "online"
+    action: Optional[str] = Field(None, pattern="^(in|out)$")  # None = alterna automaticamente segun el ultimo escaneo
 
 
 class UserCreate(BaseModel):
@@ -584,18 +585,35 @@ def update_user(
     return updated
 
 
+TICKET_TOKEN_NAMESPACE = uuid.UUID("6f6d6473-6174-6165-4147-524144415345")  # namespace fijo del proyecto
+
+
 def build_qr_tickets(event_id: str, participant: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Genera un ticket (QR) por boleta del participante.
+
+    El token es determinístico (uuid5 sobre event_id+participant_id+indice), no
+    aleatorio: así, si una invitación se reenvía, el QR es exactamente el mismo
+    en cada envío (mismo token), en vez de emitir un segundo QR "fantasma"
+    independiente que también quedaría válido para ingresar. El payload incluye
+    la fecha/hora del evento en texto explícito (ademas de event_id) para que
+    quede auditable directamente desde el contenido del QR.
+    """
+    event = store.get_event(event_id) or {}
     tickets = []
     count = max(1, participant.get("ticket_count", 1))
     for index in range(count):
+        token = str(uuid.uuid5(TICKET_TOKEN_NAMESPACE, f"{event_id}:{participant['id']}:{index + 1}"))
         payload = json.dumps(
             {
                 "event_id": event_id,
+                "event_name": event.get("name"),
+                "event_date": event.get("date"),
+                "event_schedule": event.get("schedule"),
                 "participant_id": participant["id"],
                 "cedula": participant.get("cedula"),
                 "ticket_index": index + 1,
                 "ticket_count": count,
-                "token": str(uuid.uuid4()),
+                "token": token,
             }
         )
         qr = qrcode.make(payload)
@@ -622,6 +640,7 @@ def build_invitation_attachments(
         return tickets
 
     layout = layout or load_layout()
+    event = store.get_event(event_id)
     attachments = []
     for ticket in tickets:
         try:
@@ -629,6 +648,7 @@ def build_invitation_attachments(
                 participant_name=participant.get("name", ""),
                 qr_image_data_uri=ticket["image"],
                 layout=layout,
+                event=event,
             )
             attachments.append({**ticket, "image": composed_image})
         except Exception:
@@ -679,6 +699,7 @@ def generate_composed_invitation(
         raise HTTPException(status_code=404, detail="No hay plantilla PDF cargada. Súbela en el panel administrador.")
 
     layout = load_layout()
+    event = store.get_event(event_id)
     tickets = build_qr_tickets(event_id, participant)
     invitations = [
         {
@@ -687,6 +708,7 @@ def generate_composed_invitation(
                 participant_name=participant.get("name", ""),
                 qr_image_data_uri=ticket["image"],
                 layout=layout,
+                event=event,
             ),
         }
         for ticket in tickets
@@ -738,7 +760,7 @@ def generate_invitations_document(
         )
 
     try:
-        pdf_bytes = build_invitations_document(items, layout=layout)
+        pdf_bytes = build_invitations_document(items, layout=layout, event=event)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -760,6 +782,12 @@ async def scan_attendance(
     body: AttendanceScan,
     current_user: dict = Depends(require_role("ADMIN", "SCANNER")),
 ) -> Dict[str, Any]:
+    """Cada boleta (token) puede alternar entre 'in' (ingreso) y 'out' (salida).
+    Si no se envia 'action' explicito, se alterna automaticamente segun el
+    ultimo evento registrado para ese token: sin historial o ultimo evento
+    'out' -> se registra 'in'; ultimo evento 'in' -> se registra 'out'.
+    Pedir explicitamente una direccion igual a la actual (ej. escanear 'in'
+    de una boleta que ya esta adentro) se rechaza como duplicado."""
     payload = json.loads(body.payload)
     participant = store.get_participant(payload["participant_id"])
     if not participant or participant.get("event_id") != body.event_id:
@@ -767,23 +795,44 @@ async def scan_attendance(
     token = payload.get("token")
     if not token:
         raise HTTPException(status_code=400, detail="QR token is missing")
-    existing = store.find_attendance_by_token(body.event_id, token)
-    if existing:
-        result = {"status": "duplicate", "message": "This QR has already been used", "participant": participant}
-    else:
-        attendance = store.create_attendance(
-            {
-                "event_id": body.event_id,
-                "participant_id": payload["participant_id"],
-                "cedula": participant.get("cedula"),
-                "token": token,
-                "ticket_index": payload.get("ticket_index"),
-                "timestamp": datetime.utcnow().isoformat(),
-                "mode": body.source,
-                "status": "valid",
+
+    last_event = store.find_attendance_by_token(body.event_id, token)
+    current_direction = last_event.get("direction", "in") if last_event else "out"
+
+    if body.action:
+        next_direction = body.action
+        if next_direction == current_direction:
+            estado = "adentro" if current_direction == "in" else "afuera"
+            result = {
+                "status": "duplicate",
+                "message": f"Esta boleta ya está registrada como '{estado}'.",
+                "participant": participant,
             }
-        )
-        result = {"status": "valid", "attendance": attendance, "participant": participant}
+            await broadcast({"type": "attendance", "payload": result})
+            return result
+    else:
+        next_direction = "out" if current_direction == "in" else "in"
+
+    attendance = store.create_attendance(
+        {
+            "event_id": body.event_id,
+            "participant_id": payload["participant_id"],
+            "cedula": participant.get("cedula"),
+            "token": token,
+            "ticket_index": payload.get("ticket_index"),
+            "timestamp": datetime.utcnow().isoformat(),
+            "mode": body.source,
+            "status": "valid",
+            "direction": next_direction,
+        }
+    )
+    result = {
+        "status": "valid",
+        "direction": next_direction,
+        "message": "Entrada registrada correctamente." if next_direction == "in" else "Salida registrada correctamente.",
+        "attendance": attendance,
+        "participant": participant,
+    }
     await broadcast({"type": "attendance", "payload": result})
     return result
 
@@ -791,6 +840,26 @@ async def scan_attendance(
 @app.get("/attendances/{event_id}")
 def list_attendances(event_id: str, current_user: dict = Depends(get_current_user)) -> List[Dict[str, Any]]:
     return store.list_attendances(event_id)
+
+
+def _summarize_attendance_by_token(attendances: List[Dict[str, Any]]) -> tuple[set, set]:
+    """Cada boleta (token) puede tener varios eventos (entrada/salida). Devuelve
+    (tokens que entraron alguna vez, tokens cuyo ULTIMO evento fue entrada
+    -- es decir, personas actualmente adentro). Los registros anteriores a la
+    funcion de salida no tienen 'direction': se asumen 'in' (entrada), que era
+    el unico caso posible antes."""
+    by_token: Dict[str, List[Dict[str, Any]]] = {}
+    for att in attendances:
+        by_token.setdefault(att.get("token"), []).append(att)
+
+    entered, inside = set(), set()
+    for token, events in by_token.items():
+        events_sorted = sorted(events, key=lambda a: a.get("timestamp", ""))
+        if any(e.get("direction", "in") == "in" for e in events_sorted):
+            entered.add(token)
+        if events_sorted[-1].get("direction", "in") == "in":
+            inside.add(token)
+    return entered, inside
 
 
 @app.get("/events/{event_id}/summary")
@@ -805,7 +874,9 @@ def event_summary(event_id: str, current_user: dict = Depends(get_current_user))
     attendances = store.list_attendances(event_id)
     capacity = int(event.get("capacity") or 0)
     total_invitations = sum(max(1, p.get("ticket_count", 1)) for p in participants)
-    used_invitations = len(attendances)
+
+    tickets_ever_entered, currently_inside = _summarize_attendance_by_token(attendances)
+    used_invitations = len(tickets_ever_entered)
 
     return {
         "event_id": event_id,
@@ -815,8 +886,23 @@ def event_summary(event_id: str, current_user: dict = Depends(get_current_user))
         "used_invitations": used_invitations,
         "pending_invitations": max(0, total_invitations - used_invitations),
         "checked_in": used_invitations,
+        "currently_inside": len(currently_inside),
         "capacity_used_pct": round((used_invitations / capacity) * 100) if capacity else 0,
     }
+
+
+@app.get("/admin/backup")
+def download_backup(current_user: dict = Depends(require_role("ADMIN"))) -> StreamingResponse:
+    """Exporta una copia de solo lectura de toda la base de datos (eventos,
+    participantes, asistencias, usuarios) como JSON descargable."""
+    data = store.export_backup()
+    payload = json.dumps(data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+    filename = f"backup_asistencia_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @app.get("/events/{event_id}/report")
@@ -836,7 +922,12 @@ def event_report(event_id: str, current_user: dict = Depends(require_role("ADMIN
     rows = []
     for participant in participants:
         used = attendance_map.get(participant["id"], [])
-        pending_count = max(0, participant.get("ticket_count", 1) - len(used))
+        tickets_entered, tickets_inside = _summarize_attendance_by_token(used)
+        pending_count = max(0, participant.get("ticket_count", 1) - len(tickets_entered))
+        entradas = [a for a in used if a.get("direction", "in") == "in"]
+        salidas = [a for a in used if a.get("direction") == "out"]
+        ultima_entrada = max(entradas, key=lambda a: a.get("timestamp", ""), default=None)
+        ultima_salida = max(salidas, key=lambda a: a.get("timestamp", ""), default=None)
         latest = max(used, key=lambda att: att.get("timestamp", ""), default=None) if used else None
         rows.append(
             {
@@ -850,12 +941,14 @@ def event_report(event_id: str, current_user: dict = Depends(require_role("ADMIN
                 "Cohorte": participant.get("cohorte", ""),
                 "Promedio": participant.get("promedio", ""),
                 "Invitaciones emitidas": participant.get("ticket_count", 1),
-                "Invitaciones usadas": len(used),
+                "Invitaciones usadas": len(tickets_entered),
                 "Invitaciones pendientes": pending_count,
-                "Estado asistencia": "Asistió" if used else "Pendiente",
+                "Estado asistencia": "Asistió" if tickets_entered else "Pendiente",
+                "Estado actual": "Adentro" if tickets_inside else ("Salió" if ultima_salida else "-"),
                 "Ticket index": latest.get("ticket_index") if latest else None,
                 "Token": latest.get("token") if latest else None,
-                "Fecha/Hora ingreso": latest.get("timestamp") if latest else None,
+                "Fecha/Hora ingreso": ultima_entrada.get("timestamp") if ultima_entrada else None,
+                "Fecha/Hora salida": ultima_salida.get("timestamp") if ultima_salida else None,
                 "Modo": latest.get("mode") if latest else None,
             }
         )

@@ -193,7 +193,11 @@ class AttendanceStore:
         return self._clean_documents(list(self.db.attendances.find({"event_id": event_id}).sort("timestamp", -1)))
 
     def find_attendance_by_token(self, event_id: str, token: str) -> Optional[Dict[str, Any]]:
-        return self.db.attendances.find_one({"event_id": event_id, "token": token})
+        """Devuelve el evento (entrada/salida) mas reciente de esta boleta, o
+        None si nunca se ha escaneado. Se usa para decidir si el proximo
+        escaneo de esta misma boleta debe registrarse como entrada o salida."""
+        docs = list(self.db.attendances.find({"event_id": event_id, "token": token}).sort("timestamp", -1).limit(1))
+        return docs[0] if docs else None
 
     def list_attendances_for_participant(self, event_id: str, participant_id: str) -> List[Dict[str, Any]]:
         return self._clean_documents(list(self.db.attendances.find({"event_id": event_id, "participant_id": participant_id}).sort("timestamp", -1)))
@@ -203,6 +207,19 @@ class AttendanceStore:
 
     def list_users(self) -> List[Dict[str, Any]]:
         return self._clean_documents(list(self.db.users.find({}, {"password_hash": 0}).sort("username", 1)))
+
+    def export_backup(self) -> Dict[str, Any]:
+        """Copia de solo lectura de toda la base (eventos, participantes,
+        asistencias, usuarios sin password_hash). No modifica nada; se usa
+        para el boton de backup del panel administrador."""
+        return {
+            "generated_at": datetime.utcnow().isoformat(),
+            "mode": self.mode,
+            "events": self._clean_documents(list(self.db.events.find({}))),
+            "participants": self._clean_documents(list(self.db.participants.find({}))),
+            "attendances": self._clean_documents(list(self.db.attendances.find({}))),
+            "users": self._clean_documents(list(self.db.users.find({}, {"password_hash": 0}))),
+        }
 
     def create_user(self, user: Dict[str, Any]) -> Dict[str, Any]:
         existing = self.db.users.find_one({"username": user["username"]})

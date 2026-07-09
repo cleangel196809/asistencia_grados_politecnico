@@ -2,6 +2,8 @@ import base64
 import functools
 import io
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +24,60 @@ DEFAULT_LAYOUT: Dict[str, Any] = {
     "name": {"x": 0.5, "y": 0.385, "font_size": 130, "max_width": 0.78, "color": "#26265f"},
     "qr": {"x": 0.5, "y": 0.665, "size": 0.48},
 }
+
+# La plantilla actual (invitation_template.pdf) trae impresos como texto FIJO
+# el dia/fecha/hora de una sola ceremonia ("Viernes 10 de Julio de 2026,
+# 10:00 a.m."). Como la misma plantilla se reutiliza para las 4 ceremonias
+# (cada una con fecha/hora distinta), ese texto queda incorrecto para 3 de
+# las 4. Estas coordenadas (en puntos PDF, medidas sobre la plantilla actual
+# de 1080x2211pt vía page.get_drawings()/get_text("words")) cubren solo el
+# bloque de texto (no los iconos de calendario/reloj, que son genericos y sí
+# sirven para cualquier fecha) para redibujar el dato correcto por evento.
+PAGE_SIZE_PT = (1080.0, 2211.0)
+DATETIME_BLOCK_PT = {
+    "cover": (600.0, 1157.0, 977.0, 1354.0),  # x0, y0, x1, y1
+    "text_x": 613.0,
+    "weekday_y": 1181.0,
+    "date_y": 1216.0,
+    "time_y": 1268.0,
+    "font_size": 40,
+    "max_width": 977.0 - 613.0,
+    "fill": (41, 35, 92),  # navy de la plantilla, medido de page.get_drawings()
+    "color": "#FFFFFF",
+}
+
+_SPANISH_WEEKDAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+_SPANISH_MONTHS = [
+    "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+]
+
+
+def event_datetime_lines(event: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Deriva (dia de la semana, fecha en texto, hora) a partir de event.date
+    (YYYY-MM-DD) y event.schedule (texto libre, ej. '10:00 - 13:00' o
+    '15:00 a 17:00'). Devuelve None si event.date no tiene el formato esperado
+    -- en ese caso se deja el texto fijo de la plantilla tal cual, en vez de
+    arriesgar un dato peor que el original."""
+    date_str = (event or {}).get("date") or ""
+    try:
+        dt = datetime.strptime(date_str.strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+
+    weekday = _SPANISH_WEEKDAYS[dt.weekday()]
+    date_line = f"{dt.day} de {_SPANISH_MONTHS[dt.month]} de {dt.year}"
+
+    schedule = (event or {}).get("schedule") or ""
+    match = re.search(r"(\d{1,2}):(\d{2})", schedule)
+    time_line = ""
+    if match:
+        hour, minute = int(match.group(1)), match.group(2)
+        suffix = "a.m." if hour < 12 else "p.m."
+        hour_12 = hour % 12 or 12
+        time_line = f"{hour_12}:{minute} {suffix}"
+
+    return {"weekday": weekday, "date_line": date_line, "time_line": time_line}
 
 _FONT_CANDIDATES = [
     "C:/Windows/Fonts/segoeuib.ttf",
@@ -123,10 +179,48 @@ def _decode_qr_bytes(qr_image_data_uri: str) -> bytes:
     return base64.b64decode(qr_image_data_uri)
 
 
-def _draw_invitation(base_image: Image.Image, *, participant_name: str, qr_image_bytes: bytes, layout: Dict[str, Any]) -> Image.Image:
+def _draw_event_datetime(draw: ImageDraw.ImageDraw, width: int, event: Optional[Dict[str, Any]]) -> None:
+    """Cubre el dia/fecha/hora fijos de la plantilla y redibuja los correctos
+    para el evento de esta invitacion (ver DATETIME_BLOCK_PT arriba)."""
+    if not event:
+        return
+    lines = event_datetime_lines(event)
+    if not lines:
+        return
+
+    scale = width / PAGE_SIZE_PT[0]
+    cfg = DATETIME_BLOCK_PT
+    x0, y0, x1, y1 = [v * scale for v in cfg["cover"]]
+    draw.rectangle([x0, y0, x1, y1], fill=cfg["fill"])
+
+    text_x = int(cfg["text_x"] * scale)
+    max_width_px = int(cfg["max_width"] * scale)
+    font_size = max(12, int(cfg["font_size"] * scale))
+
+    for value, y_pt in (
+        (lines["weekday"], cfg["weekday_y"]),
+        (lines["date_line"], cfg["date_y"]),
+        (lines["time_line"], cfg["time_y"]),
+    ):
+        if not value:
+            continue
+        font, _ = _fit_font(draw, value, font_size, max_width_px, min_size=14)
+        draw.text((text_x, int(y_pt * scale)), value, font=font, fill=cfg["color"])
+
+
+def _draw_invitation(
+    base_image: Image.Image,
+    *,
+    participant_name: str,
+    qr_image_bytes: bytes,
+    layout: Dict[str, Any],
+    event: Optional[Dict[str, Any]] = None,
+) -> Image.Image:
     page = base_image.copy()
     width, height = page.size
     draw = ImageDraw.Draw(page)
+
+    _draw_event_datetime(draw, width, event)
 
     name_cfg = layout["name"]
     text = (participant_name or "").strip() or "Invitado"
@@ -152,13 +246,14 @@ def compose_invitation_image(
     participant_name: str,
     qr_image_bytes: bytes,
     layout: Optional[Dict[str, Any]] = None,
+    event: Optional[Dict[str, Any]] = None,
 ) -> bytes:
     if not is_template_available():
         raise FileNotFoundError("No hay plantilla PDF cargada. Súbela primero en el panel administrador.")
 
     layout = layout or load_layout()
     base = _load_base_image()
-    page = _draw_invitation(base, participant_name=participant_name, qr_image_bytes=qr_image_bytes, layout=layout)
+    page = _draw_invitation(base, participant_name=participant_name, qr_image_bytes=qr_image_bytes, layout=layout, event=event)
 
     buffer = io.BytesIO()
     page.save(buffer, format="PNG")
@@ -170,9 +265,10 @@ def compose_invitation_data_uri(
     participant_name: str,
     qr_image_data_uri: str,
     layout: Optional[Dict[str, Any]] = None,
+    event: Optional[Dict[str, Any]] = None,
 ) -> str:
     qr_bytes = _decode_qr_bytes(qr_image_data_uri)
-    composed = compose_invitation_image(participant_name=participant_name, qr_image_bytes=qr_bytes, layout=layout)
+    composed = compose_invitation_image(participant_name=participant_name, qr_image_bytes=qr_bytes, layout=layout, event=event)
     return "data:image/png;base64," + base64.b64encode(composed).decode("ascii")
 
 
@@ -181,6 +277,7 @@ def build_invitations_document(
     *,
     layout: Optional[Dict[str, Any]] = None,
     max_width: int = 700,
+    event: Optional[Dict[str, Any]] = None,
 ) -> bytes:
     """Arma un PDF de varias páginas (una invitación por página) para revisión rápida.
 
@@ -206,6 +303,7 @@ def build_invitations_document(
             participant_name=item.get("participant_name", ""),
             qr_image_bytes=item["qr_image_bytes"],
             layout=layout,
+            event=event,
         )
         pages.append(page.convert("RGB"))
 
