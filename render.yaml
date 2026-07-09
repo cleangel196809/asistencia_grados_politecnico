@@ -33,6 +33,14 @@ services:
         value: "Eventos Politécnico Internacional"
       - key: EMAIL_USE_TLS
         value: "true"
+      - key: PYTHON_VERSION
+        value: "3.12.9"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        value: "+14155238886"
       - key: TRELLO_API_KEY
         sync: false
       - key: TRELLO_API_TOKEN

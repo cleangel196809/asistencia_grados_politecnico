@@ -31,6 +31,7 @@ from app.invitation_service import (
     save_layout,
 )
 from app.security import create_access_token
+from app.twilio_whatsapp_service import is_twilio_configured, send_bulk_whatsapp_messages, send_whatsapp_message
 from app.whatsapp_trello_service import program_whatsapp_cards_for_event
 
 
@@ -72,6 +73,12 @@ class WhatsAppIndividualRequest(BaseModel):
     event_id: str
     participant_id: str
     whatsapp_text: str = ""
+
+
+class WhatsAppProgramRequest(BaseModel):
+    event_id: str
+    whatsapp_text: str = ""
+    participant_ids: Optional[List[str]] = None
 
 
 def _build_whatsapp_program_inputs(event_id: str, participants: List[Dict[str, Any]], whatsapp_text: str):
@@ -159,6 +166,63 @@ def program_whatsapp_trello_individual(
         raise HTTPException(status_code=503, detail=str(exc))
     for item in result.get("created_items", []):
         store.increment_participant_send_count(item["participant_id"], "whatsapp")
+    return result
+
+
+@app.get("/invitations/whatsapp/status")
+def whatsapp_status(current_user: dict = Depends(get_current_user)) -> Dict[str, Any]:
+    return {"configured": is_twilio_configured(), "from_number": os.getenv("TWILIO_WHATSAPP_FROM", "+14155238886")}
+
+
+@app.post("/invitations/whatsapp/twilio/individual")
+def send_whatsapp_twilio_individual(
+    body: WhatsAppIndividualRequest,
+    current_user: dict = Depends(require_role("ADMIN", "LOGISTICO")),
+) -> Dict[str, Any]:
+    """Envía un WhatsApp real (Twilio) a un solo invitado."""
+
+    event = store.get_event(body.event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    participant = store.get_participant(body.participant_id)
+    if not participant or participant.get("event_id") != body.event_id:
+        raise HTTPException(status_code=404, detail="Participant not found for the selected event")
+
+    text = body.whatsapp_text or f"Hola {participant.get('name', '')}, te invitamos al evento {event.get('name', '')} en {event.get('location', '')} el {event.get('date', '')}."
+    result = send_whatsapp_message(to_phone=participant.get("phone", ""), body_text=text)
+    if result.get("sent"):
+        store.increment_participant_send_count(participant["id"], "whatsapp")
+    return result
+
+
+@app.post("/invitations/whatsapp/twilio/program")
+def send_whatsapp_twilio_bulk(
+    body: WhatsAppProgramRequest,
+    current_user: dict = Depends(require_role("ADMIN")),
+) -> Dict[str, Any]:
+    """Envía WhatsApp real (Twilio) masivo a todos los invitados del evento (o a un subconjunto)."""
+
+    event = store.get_event(body.event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    participants = store.list_participants(body.event_id)
+    if body.participant_ids:
+        participant_ids_set = set(body.participant_ids)
+        participants = [p for p in participants if p.get("id") in participant_ids_set]
+
+    recipients = []
+    for p in participants:
+        if not p.get("phone"):
+            continue
+        text = body.whatsapp_text or f"Hola {p.get('name', '')}, te invitamos al evento {event.get('name', '')} en {event.get('location', '')} el {event.get('date', '')}."
+        recipients.append({"participant_id": p.get("id"), "to_phone": p.get("phone"), "body_text": text})
+
+    result = send_bulk_whatsapp_messages(recipients=recipients)
+    for item in result.get("results", []):
+        if item.get("sent") and item.get("participant_id"):
+            store.increment_participant_send_count(item["participant_id"], "whatsapp")
     return result
 
 

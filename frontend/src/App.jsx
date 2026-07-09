@@ -979,19 +979,19 @@ function AdminPage({ user, onLogout }) {
     const fromNote = adminSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${adminSendSettings.whatsappFrom}` : '';
     const whatsappText = `Hola ${participant.name}. Estás invitado. ${fromNote}`.trim();
     try {
-      const { data } = await api.post('/invitations/whatsapp/trello/individual', {
+      const { data } = await api.post('/invitations/whatsapp/twilio/individual', {
         event_id: selectedEventId,
         participant_id: participant.id,
         whatsapp_text: whatsappText,
       });
-      if (data?.created) {
-        setStatus(`Tarjeta de WhatsApp creada en Trello para ${participant.name} (con la invitación adjunta).`);
+      if (data?.sent) {
+        setStatus(`WhatsApp enviado de verdad a ${participant.name} (${participant.phone}) vía Twilio.`);
         return;
       }
-      setStatus('No se pudo crear la tarjeta en Trello. Se abrirá WhatsApp directo como respaldo.');
+      setStatus(`No se pudo enviar por Twilio (${data?.reason || 'sin configurar'}). Nota: en modo Sandbox el número debe haberse unido antes con el código "join ...". Se abrirá WhatsApp directo como respaldo.`);
       sendInvitation(participant, 'whatsapp');
     } catch (error) {
-      setStatus(`No fue posible usar Trello (${getErrorDetail(error, 'sin configurar')}). Se abre WhatsApp directo como respaldo.`);
+      setStatus(`No fue posible usar Twilio (${getErrorDetail(error, 'sin configurar')}). Se abre WhatsApp directo como respaldo.`);
       sendInvitation(participant, 'whatsapp');
     }
   };
@@ -1735,19 +1735,19 @@ function LogisticsPage({ user, onLogout }) {
     const fromNote = logisticSendSettings.whatsappFrom ? `Enviar desde WhatsApp: ${logisticSendSettings.whatsappFrom}` : '';
     const whatsappText = `Hola ${person.name}. Estás invitado al evento. ${fromNote}`.trim();
     try {
-      const { data } = await api.post('/invitations/whatsapp/trello/individual', {
+      const { data } = await api.post('/invitations/whatsapp/twilio/individual', {
         event_id: selectedEventId,
         participant_id: person.id,
         whatsapp_text: whatsappText,
       });
-      if (data?.created) {
-        setStatus(`Tarjeta de WhatsApp creada en Trello para ${person.name} (con la invitación adjunta).`);
+      if (data?.sent) {
+        setStatus(`WhatsApp enviado de verdad a ${person.name} (${person.phone}) vía Twilio.`);
         return;
       }
-      setStatus('No se pudo crear la tarjeta en Trello. Se abrirá WhatsApp directo como respaldo.');
+      setStatus(`No se pudo enviar por Twilio (${data?.reason || 'sin configurar'}). Nota: en modo Sandbox el número debe haberse unido antes con "join ...". Se abrirá WhatsApp directo como respaldo.`);
       sendInvitation(person, 'whatsapp');
     } catch (error) {
-      setStatus(`No fue posible usar Trello (${getErrorDetail(error, 'sin configurar')}). Se abre WhatsApp directo como respaldo.`);
+      setStatus(`No fue posible usar Twilio (${getErrorDetail(error, 'sin configurar')}). Se abre WhatsApp directo como respaldo.`);
       sendInvitation(person, 'whatsapp');
     }
   };
