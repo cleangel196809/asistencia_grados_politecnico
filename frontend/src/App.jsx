@@ -62,6 +62,50 @@ function clearAuth() {
   localStorage.removeItem(AUTH_STORAGE_KEY);
 }
 
+// Abre el WebSocket de /ws/attendances (el backend transmite un mensaje cada
+// vez que CUALQUIER scanner registra un ingreso/salida) y llama a onEvent con
+// cada mensaje recibido, para que los dashboards se actualicen en vivo sin
+// depender de que el propio usuario haga el escaneo. Reintenta la conexion
+// si se cae. Devuelve una funcion para cerrar la conexion (cleanup de effect).
+function openAttendanceSocket(onEvent) {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || '';
+  let wsUrl;
+  if (apiBase) {
+    wsUrl = apiBase.replace(/^http/, 'ws') + '/ws/attendances';
+  } else {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    wsUrl = `${proto}//${window.location.host}/api/ws/attendances`;
+  }
+
+  let socket;
+  let closedByUs = false;
+  let retryTimeout;
+
+  const connect = () => {
+    socket = new WebSocket(wsUrl);
+    socket.onmessage = (event) => {
+      try {
+        onEvent(JSON.parse(event.data));
+      } catch (error) {
+        // ignorar mensajes que no sean JSON valido
+      }
+    };
+    socket.onclose = () => {
+      if (!closedByUs) {
+        retryTimeout = setTimeout(connect, 4000);
+      }
+    };
+    socket.onerror = () => socket.close();
+  };
+  connect();
+
+  return () => {
+    closedByUs = true;
+    clearTimeout(retryTimeout);
+    socket?.close();
+  };
+}
+
 function getErrorDetail(error, fallbackMessage) {
   const detail = error?.response?.data?.detail;
   if (Array.isArray(detail)) {
@@ -71,6 +115,34 @@ function getErrorDetail(error, fallbackMessage) {
     return detail;
   }
   return fallbackMessage;
+}
+
+// Intenta ubicar, dentro de "events", el que corresponde a AHORA MISMO segun
+// su fecha (event.date, YYYY-MM-DD) y su horario en texto libre (event.schedule,
+// ej. "10:00 - 13:00" o "15:00 a 17:00" -- se toma el primer y ultimo HH:MM que
+// aparezcan). Si ninguno coincide (o el horario no se pudo interpretar),
+// devuelve null para que el llamador decida el respaldo (ej. el primero de la lista).
+function findCurrentEvent(events) {
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const parseTimes = (schedule) => {
+    const matches = [...(schedule || '').matchAll(/(\d{1,2}):(\d{2})/g)];
+    return matches.map((m) => parseInt(m[1], 10) * 60 + parseInt(m[2], 10));
+  };
+
+  for (const event of events) {
+    if (event.date !== todayStr) continue;
+    const times = parseTimes(event.schedule);
+    if (times.length < 2) continue;
+    const [start, end] = [Math.min(...times), Math.max(...times)];
+    if (nowMinutes >= start - 60 && nowMinutes <= end + 60) {
+      // margen de 1h antes/despues por si la gente llega temprano o el evento se extiende
+      return event;
+    }
+  }
+  return null;
 }
 
 function ProgressBar({ value, max, label, color }) {
@@ -346,7 +418,8 @@ function AdminPage({ user, onLogout }) {
     const { data } = await api.get('/events');
     setEvents(data);
     if (!selectedEventId && data.length) {
-      setSelectedEventId(data[0].id);
+      const current = findCurrentEvent(data);
+      setSelectedEventId((current || data[0]).id);
     }
   };
 
@@ -377,6 +450,8 @@ function AdminPage({ user, onLogout }) {
     loadEvents();
   }, []);
 
+  const [liveRefreshTick, setLiveRefreshTick] = useState(0);
+
   useEffect(() => {
     if (!events.length) return;
     let cancelled = false;
@@ -399,7 +474,17 @@ function AdminPage({ user, onLogout }) {
     return () => {
       cancelled = true;
     };
-  }, [events]);
+  }, [events, liveRefreshTick]);
+
+  // Actualizacion en vivo: cualquier ingreso/salida registrado por cualquier
+  // scanner refresca de inmediato los tiles del dashboard.
+  useEffect(() => {
+    return openAttendanceSocket((msg) => {
+      if (msg?.type === 'attendance') {
+        setLiveRefreshTick((tick) => tick + 1);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     loadUsers();
@@ -1624,7 +1709,8 @@ function LogisticsPage({ user, onLogout }) {
     const { data } = await api.get('/events');
     setEvents(data);
     if (!selectedEventId && data.length) {
-      setSelectedEventId(data[0].id);
+      const current = findCurrentEvent(data);
+      setSelectedEventId((current || data[0]).id);
     }
   };
 
@@ -1644,6 +1730,18 @@ function LogisticsPage({ user, onLogout }) {
     };
     loadAttendances();
     loadAllParticipants();
+  }, [selectedEventId]);
+
+  // Actualizacion en vivo: refresca ingresos/invitados apenas cualquier
+  // scanner registre un movimiento en el evento seleccionado.
+  useEffect(() => {
+    if (!selectedEventId) return undefined;
+    const close = openAttendanceSocket((msg) => {
+      if (msg?.type === 'attendance' && msg?.payload?.attendance?.event_id === selectedEventId) {
+        api.get(`/attendances/${selectedEventId}`).then(({ data }) => setAttendances(data)).catch(() => {});
+      }
+    });
+    return close;
   }, [selectedEventId]);
 
   const invitationSummary = allParticipants.reduce(
@@ -1940,7 +2038,8 @@ function ScannerPage({ user, onLogout }) {
     const { data } = await api.get('/events');
     setEvents(data);
     if (!selectedEventId && data.length) {
-      setSelectedEventId(data[0].id);
+      const current = findCurrentEvent(data);
+      setSelectedEventId((current || data[0]).id);
     }
   };
 
@@ -1986,6 +2085,18 @@ function ScannerPage({ user, onLogout }) {
 
     loadParticipants();
     loadAttendances();
+  }, [selectedEventId]);
+
+  // Actualizacion en vivo: cuando CUALQUIER scanner (este u otro dispositivo)
+  // registra un ingreso/salida, refresca el conteo de este evento al instante.
+  useEffect(() => {
+    if (!selectedEventId) return undefined;
+    const close = openAttendanceSocket((msg) => {
+      if (msg?.type === 'attendance' && msg?.payload?.attendance?.event_id === selectedEventId) {
+        api.get(`/attendances/${selectedEventId}`).then(({ data }) => setAttendances(data)).catch(() => {});
+      }
+    });
+    return close;
   }, [selectedEventId]);
 
   useEffect(() => {
@@ -2046,9 +2157,14 @@ function ScannerPage({ user, onLogout }) {
       const payload = JSON.parse(decodedText);
       const participant = participants.find((item) => item.id === payload.participant_id);
       if (!participant) {
-        setStatus('QR no encontrado en la lista del evento.');
-        showToast('invalid', 'QR no válido para este evento.', 'Listo para escanear el siguiente.');
-        setLog((prev) => [{ status: 'invalid', message: 'QR inválido', time: new Date().toLocaleTimeString(), participant: payload.cedula }, ...prev]);
+        const belongsTo = payload.event_name ? `Este QR es de "${payload.event_name}" (${payload.event_date || ''} ${payload.event_schedule || ''}).` : 'Este QR no corresponde al evento activo.';
+        const mismatchMsg = payload.event_id && payload.event_id !== selectedEventId
+          ? `${belongsTo} Cambia el "Evento activo" arriba de esta pantalla al evento correcto.`
+          : 'QR no encontrado en la lista de invitados de este evento.';
+        setStatus(mismatchMsg);
+        setScanResult({ participant: { name: 'QR de otro evento', cedula: payload.cedula || '' }, status: 'invalid', message: mismatchMsg, ticketCount: '-' });
+        showToast('invalid', mismatchMsg, 'Listo para escanear el siguiente.');
+        setLog((prev) => [{ status: 'invalid', message: mismatchMsg, time: new Date().toLocaleTimeString(), participant: payload.cedula }, ...prev]);
         return;
       }
 
@@ -2164,6 +2280,16 @@ function ScannerPage({ user, onLogout }) {
               <option key={event.id} value={event.id}>{event.name}</option>
             ))}
           </select>
+          {(() => {
+            const activeEvent = events.find((e) => e.id === selectedEventId);
+            if (!activeEvent) return null;
+            const isToday = activeEvent.date === new Date().toISOString().slice(0, 10);
+            return (
+              <div className="badge" style={!isToday ? { background: '#fef3c7', color: '#92400e' } : {}}>
+                {activeEvent.date} · {activeEvent.schedule || 'sin horario'} {!isToday && '— esta ceremonia NO es hoy, confirma que sea la correcta'}
+              </div>
+            );
+          })()}
           <div id="scanner" ref={scannerRef} className="scanner-frame" />
           <button onClick={() => syncQueue()}>Sincronizar cola</button>
           <form onSubmit={async (event) => { event.preventDefault(); await handleScan(manualCode); setManualCode(''); }} className="stack" style={{ marginTop: '1rem' }}>
